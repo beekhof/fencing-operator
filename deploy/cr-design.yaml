@@ -1,0 +1,70 @@
+apiVersion: "fencing.clusterlabs.org/v1alpha1"
+kind: "FencingSet"
+metadata:
+  name: "inline-example"
+rules:
+- hosts:
+  - somehost
+  mechanisms:
+  - set:
+    name: private1
+    mechanisms:
+    - driver: openstack
+      module: network
+      config:
+      - user: admin
+      - password: admin
+      - auth_url: https://1.1.1.1:5000
+    - driver: openstack
+      module: disk
+      config:
+      - user: admin
+      - password: admin
+      - auth_url: https://1.1.1.1:5000
+  - set:
+    name: private2
+    mechanisms:
+    - driver: baremetal
+      module: ipmilan
+      config:
+      - user: admin
+      - password: admin
+      - ip: 1.2.3.4
+---
+apiVersion: "fencing.clusterlabs.org/v1alpha1"
+kind: "FencingMethod"
+metadata:
+  name: "shared1"
+  mechanisms: 
+  - driver: openstack
+    module: power
+    config:
+    - user: admin
+    - passwordSecret: overcloud-secret
+    - auth_url: https://1.1.1.1:5000
+---
+apiVersion: "fencing.clusterlabs.org/v1alpha1"
+kind: "FencingMethod"
+metadata:
+  name: "shared2"
+  mechanisms: 
+  - driver: baremetal
+    module: ipmilan
+    dynamic_config:
+    - field: ip
+      map:
+      - somehost: 1.2.3.4
+      - otherhost: 1.2.3.5
+    config:
+    - user: admin
+    - passwordSecret: ipmi-secret
+---
+apiVersion: "fencing.clusterlabs.org/v1alpha1"
+kind: "FencingSet"
+metadata:
+  name: "shared-example"
+rules:
+- hosts:
+  - "*"
+  mechanismRefs: [ "shared1", "shared2" ]
+  
