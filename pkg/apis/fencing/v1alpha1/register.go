@@ -29,6 +29,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&FencingSet{},
 		&FencingSetList{},
+		&FencingMethod{},
+		&FencingMethodList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil
