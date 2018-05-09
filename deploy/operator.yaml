@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fencing-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: fencing-operator
+  template:
+    metadata:
+      labels:
+        name: fencing-operator
+    spec:
+      containers:
+        - name: fencing-operator
+          image: quay.io/beekhof/fencing-operator
+          command:
+          - fencing-operator
+          imagePullPolicy: Always
