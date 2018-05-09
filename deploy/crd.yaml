@@ -1,0 +1,13 @@
+apiVersion: apiextensions.k8s.io/v1beta1
+kind: CustomResourceDefinition
+metadata:
+  name: fencingsets.fencing.clusterlabs.org
+spec:
+  group: fencing.clusterlabs.org
+  names:
+    kind: FencingSet
+    listKind: FencingSetList
+    plural: fencingsets
+    singular: fencingset
+  scope: Namespaced
+  version: v1alpha1

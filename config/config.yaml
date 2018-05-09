@@ -1,0 +1,3 @@
+apiVersion: fencing.clusterlabs.org/v1alpha1
+kind: FencingSet
+projectName: fencing-operator
