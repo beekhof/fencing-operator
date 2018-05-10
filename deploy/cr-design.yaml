@@ -3,8 +3,8 @@ kind: "FencingSet"
 metadata:
   name: "inline-example"
 spec:
-  hosts:
-  - somehost
+  nodeSelector:
+  - spec.Name: somehost
   methods:
   - set:
     name: private1
@@ -68,7 +68,5 @@ kind: "FencingSet"
 metadata:
   name: "shared-example"
 spec:
-  hosts:
-  - "*"
   methodRefs: [ "shared1", "shared2" ]
   
