@@ -9,6 +9,29 @@ import (
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
+type FencingRequestList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata"`
+	Items           []FencingRequest `json:"items"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+type FencingRequest struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata"`
+	Spec              FencingRequestSpec   `json:"spec"`
+	Status            FencingRequestStatus `json:"status,omitempty"`
+}
+
+type FencingRequestSpec struct {
+}
+
+type FencingRequestStatus struct {
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
 type FencingSetList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata"`
@@ -26,7 +49,7 @@ type FencingSet struct {
 
 
 type FencingSetSpec struct {
-	Hosts         []string `json:"hosts"`
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 	Methods    []FencingMechanism `json:"methods"`
 	MethodRefs []v1.LocalObjectReference `json:"methodRefs"`
 }
@@ -60,7 +83,9 @@ type FencingMechanism struct {
 
 	// An optional list of references to secrets in the same namespace
 	// to use when calling fencing modules (ie. IPMI or cloud provider passwords).
-	// See http://kubernetes.io/docs/user-guide/images#specifying-imagepullsecrets-on-a-pod
+	// 
+	// See https://kubernetes.io/docs/concepts/configuration/secret/ and/or
+	// http://kubernetes.io/docs/user-guide/images#specifying-imagepullsecrets-on-a-pod
 	Secrets map[string]v1.LocalObjectReference `json:"secrets"`
 }
 
