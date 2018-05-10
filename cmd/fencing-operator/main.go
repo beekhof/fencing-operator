@@ -20,6 +20,8 @@ func printVersion() {
 func main() {
 	printVersion()
 	sdk.Watch("fencing.clusterlabs.org/v1alpha1", "FencingSet", "default", 5)
+	sdk.Watch("k8s.io.api.core/v1", "Node", "default", 5)
+	sdk.Watch("k8s.io.api.core/v1", "Event", "default", 5)
 	sdk.Handle(stub.NewHandler())
 	sdk.Run(context.TODO())
 }
