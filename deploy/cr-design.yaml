@@ -1,72 +1,59 @@
-apiVersion: "fencing.clusterlabs.org/v1alpha1"
-kind: "FencingSet"
+apiVersion: v1
+kind: ConfigMap
 metadata:
-  name: "inline-example"
-spec:
-  nodeSelector:
-  - spec.Name: somehost
-  methods:
-  - set:
-    name: private1
-    mechanisms:
-    - driver: openstack
-      module: network
-      config:
-      - user: admin
-      - password: admin
-      - auth_url: https://1.1.1.1:5000
-    - driver: openstack
-      module: disk
-      config:
-      - user: admin
-      - password: admin
-      - auth_url: https://1.1.1.1:5000
-  - set:
-    name: private2
-    mechanisms:
-    - driver: baremetal
-      module: ipmilan
-      config:
-      - user: admin
-      - password: admin
-      - ip: 1.2.3.4
+  labels:
+    app: fencing-operator
+  name: single-host-non-destructive
+data:
+  fencing-config: |
+    nodeSelector:
+    - spec.Name: somehost
+    methods:
+    - set:
+      name: openstack-isolate
+      mechanisms:
+      - driver: openstack
+        module: network
+        config:
+        - user: admin
+        - password: admin
+        - auth_url: https://1.1.1.1:5000
+      - driver: openstack
+        module: disk
+        config:
+        - user: admin
+        - password: admin
+        - auth_url: https://1.1.1.1:5000
 ---
-apiVersion: "fencing.clusterlabs.org/v1alpha1"
-kind: "FencingMethod"
+apiVersion: v1
+kind: ConfigMap
 metadata:
-  name: "shared1"
-spec:
-  mechanisms: 
-  - driver: openstack
-    module: power
-    config:
-    - user: admin
-    - auth_url: https://1.1.1.1:5000
-    secrets:
-    - password: overcloud-secret
----
-apiVersion: "fencing.clusterlabs.org/v1alpha1"
-kind: "FencingMethod"
-metadata:
-  name: "shared2"
-spec:
-  mechanisms: 
-  - driver: baremetal
-    module: ipmilan
-    dynamic_config:
-    - field: ip
-      map:
-      - somehost: 1.2.3.4
-      - otherhost: 1.2.3.5
-    config:
-    - user: admin
-    secrets:
-    - password: ipmi-secret
----
-apiVersion: "fencing.clusterlabs.org/v1alpha1"
-kind: "FencingSet"
-metadata:
-  name: "shared-example"
-spec:
-  methodRefs: [ "shared1", "shared2" ]
-  
+  labels:
+    app: fencing-operator
+  name: default-openstack-with-baremetal-backup
+data:
+  fencing-config: |
+    methods:
+    - set:
+      name: openstack-power
+      mechanisms:
+      - driver: openstack
+        config:
+        - user: admin
+        - auth_url: https://1.1.1.1:5000
+        secrets:
+        - password: overcloud-secret
+    - set:
+      name: fallback
+      mechanisms:
+      - driver: baremetal
+        module: ipmilan
+        dynamic_config:
+        - field: ip
+          map:
+          - somehost: 1.2.3.4
+          - otherhost: 1.2.3.5
+        config:
+        - user: admin
+        secrets:
+        - password: ipmi-secret
