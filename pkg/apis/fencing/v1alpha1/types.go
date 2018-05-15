@@ -3,6 +3,8 @@ package v1alpha1
 // https://github.com/kubernetes/apimachinery/blob/master/pkg/apis/meta/v1/types.go
 
 import (
+	"date"
+	
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -25,9 +27,26 @@ type FencingRequest struct {
 }
 
 type FencingRequestSpec struct {
+	Target    string    `json:"target"`
+	Origin    string    `json:"origin,omitempty"`	
+	Operation string    `json:"operation,omitempty"`   // On, Off, Cycle
+
+	// Allow actions to be scheduled in the future
+	//
+	// A _failed_ node returning to a healthy state cancels any
+	// existing scheduled fencing actions
+	ValidAfter date.Time `json:"validAfter,omitempty"`
 }
 
 type FencingRequestStatus struct {
+	Updates []FencingRequestStatusUpdate `json:"updates,omitempty"`
+}
+
+type FencingRequestStatusUpdate struct {
+	Timestamp date.Time `json:"timestamp"`
+	Complete  bool  `json:"complete"`
+	Message   string `json:"message"`
+	Output    string `json:"output"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
