@@ -235,7 +235,7 @@ func (h *Handler) CreateFencingRequest(node *v1.Node, cause string) error {
 	err := wait.ExponentialBackoff(backoff, func() (bool, error) {
 		err := action.Create(request)
 		if err != nil && !errors.IsAlreadyExists(err) {
-			// Re-Try it as errors writing to the API server are common
+			// Retry it as errors writing to the API server are common
 			return false, err
 		}
 		return true, nil

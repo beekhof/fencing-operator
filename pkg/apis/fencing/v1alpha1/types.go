@@ -9,6 +9,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	// NodeFenceConditionRunning means the node fencing is being executed
+	RequestFailedNoConfig = "Running"
+}
+
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 type FencingRequestList struct {
@@ -41,12 +46,14 @@ type FencingRequestSpec struct {
 
 type FencingRequestStatus struct {
 	Complete  bool  `json:"complete"`
+	Result    int  `json:"result"`
+	Config *v1.LocalObjectReference `json:"config"`
+	ActiveMethod *string `json:"activeMethod"`
 	Updates []FencingRequestStatusUpdate `json:"updates,omitempty"`
 }
 
 type FencingRequestStatusUpdate struct {
 	Timestamp date.Time `json:"timestamp"`
-	Complete  bool  `json:"complete"`
 	Message   string `json:"message"`
 	Output    string `json:"output"`
 }
@@ -78,6 +85,7 @@ type FencingConfig struct {
 type FencingMethod struct {
 	Name string `json:"name"`
 	RequireAfterSeconds *int32 `json:"requireAfterSeconds,omitempty"`
+	Retries              int32 `json:"retries"`
 	Mechansims []FencingMechanism `json:"mechanisms"`
 }
 
@@ -87,7 +95,6 @@ type FencingMechanism struct {
 
 	PassTargetAs  string `json:"passTargetAs,omitempty"`
 
-	Retries         int32 `json:"retries"`
 	TimeoutSeconds *int32 `json:"timeoutSeconds,omitempty"`
 	
 	Config         map[string]string `json:"config"`
