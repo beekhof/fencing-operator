@@ -58,16 +58,16 @@ func main() {
 
 	switch mode {
 	case "watcher":
-		sdk.Watch("fencing.clusterlabs.org/v1alpha1", "FencingSet", "default", 5)
 		sdk.Watch("k8s.io.api.core/v1", "Node", "default", 5)
 		sdk.Watch("k8s.io.api.core/v1", "Event", "default", 5)
 	case "executioner":
+		sdk.Watch("k8s.io.api.core/v1", "ConfigMap", "default", 5)
 		sdk.Watch("fencing.clusterlabs.org/v1alpha1", "FencingRequest", "default", 5)
 	case "all":
-		sdk.Watch("fencing.clusterlabs.org/v1alpha1", "FencingRequest", "default", 5)
-		sdk.Watch("fencing.clusterlabs.org/v1alpha1", "FencingSet", "default", 5)
 		sdk.Watch("k8s.io.api.core/v1", "Node", "default", 5)
 		sdk.Watch("k8s.io.api.core/v1", "Event", "default", 5)
+		sdk.Watch("k8s.io.api.core/v1", "ConfigMap", "default", 5)
+		sdk.Watch("fencing.clusterlabs.org/v1alpha1", "FencingRequest", "default", 5)
 	}
 	sdk.Handle(stub.NewHandler())
 	sdk.Run(context.TODO())
