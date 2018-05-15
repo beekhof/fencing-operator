@@ -12,6 +12,8 @@ data:
     - set:
       name: openstack-isolate
       mechanisms:
+      # The operator attempts sets in order until one succeeds
+      # All mechanisms in a set are required to succeed in order for the set to succeed.
       - driver: openstack
         module: network
         config:
@@ -50,6 +52,64 @@ data:
         module: ipmilan
         dynamic_config:
         - field: ip
+	  default: 127.0.0.1
+	  # If no default is supplied, an error will be logged and the
+          # mechanism will be considered to have failed
+	  map:
+          - somehost: 1.2.3.4
+          - otherhost: 1.2.3.5
+        config:
+        - user: admin
+        secrets:
+        - password: ipmi-secret
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app: fencing-operator
+  name: single-host-timed-destructive
+data:
+  fencing-config: |
+    nodeSelector:
+    - spec.Name: somehost
+    methods:
+    - set:
+      name: openstack-isolate
+      mechanisms:
+      - driver: openstack
+        module: network
+        config:
+        - user: admin
+        - password: admin
+        - auth_url: https://1.1.1.1:5000
+      - driver: openstack
+        module: disk
+        config:
+        - user: admin
+        - password: admin
+        - auth_url: https://1.1.1.1:5000
+    - set:
+      name: fallback
+
+      require_after_seconds: 3600
+      # If 'openstack-isolate' suceeds then the node has been fenced
+      # and recovery can continue, but the operator will record that
+      # this set (bare metal fencing) is still required after
+      # 'require_after_seconds' (1 hour here).
+      #
+      # If during that 1 hour period the node returns to a healthy
+      # state, the additional fencing step will be cancelled.
+      #
+      # If 'openstack-isolate' fails, the 'fallback' set will be
+      # initiated immediately.
+
+      mechanisms:
+      - driver: baremetal
+        module: ipmilan
+        dynamic_config:
+        - field: ip
+	  default: 127.0.0.1
           map:
           - somehost: 1.2.3.4
           - otherhost: 1.2.3.5
