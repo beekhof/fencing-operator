@@ -36,9 +36,11 @@ type FencingRequestSpec struct {
 	// A _failed_ node returning to a healthy state cancels any
 	// existing scheduled fencing actions
 	ValidAfter date.Time `json:"validAfter,omitempty"`
+
 }
 
 type FencingRequestStatus struct {
+	Complete  bool  `json:"complete"`
 	Updates []FencingRequestStatusUpdate `json:"updates,omitempty"`
 }
 

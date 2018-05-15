@@ -2,7 +2,7 @@ package stub
 
 import (
 	"fmt"
-	
+
 	"github.com/beekhof/fencing-operator/pkg/apis/fencing/v1alpha1"
 
 	"github.com/operator-framework/operator-sdk/pkg/sdk/action"
@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 //	"github.com/operator-framework/operator-sdk/pkg/k8sclient"
 //	"k8s.io/apimachinery/pkg/fields"
@@ -43,8 +44,11 @@ func (h *Handler) Handle(ctx types.Context, event types.Event) error {
 	case *v1.Event:
 		h.HandleEvent(ctx, o, event.Deleted)
 		
-	case *v1alpha1.FencingSet:
-		h.HandleFencingSet(ctx, o, event.Deleted)
+	case *v1.ConfigMap:
+		h.HandleConfigMap(ctx, o, event.Deleted)
+
+	case *v1alpha1.FencingRequest:
+		h.HandleFencingRequest(ctx, o, event.Deleted)
 	}
 	return nil
 }
@@ -52,11 +56,13 @@ func (h *Handler) Handle(ctx types.Context, event types.Event) error {
 func (h *Handler) HandleNode(ctx types.Context, node *v1.Node, deleted bool) error {
 	if deleted {
 		logrus.Errorf("Node deleted : %v ", node)
+		h.CancelFencingRequest(node, nil)
+		
 	} else  {
 		for _, condition := range node.Status.Conditions {
 			if h.isNodeDirty(node, condition) {
-				// If no pending fencing request, create a new one
-//				h.createNewNodeFenceObject(node, nil)
+				h.CreateFencingRequest(node, fmt.Sprintf("%v", condition))
+				return nil // No need to continue processing
 			}
 		}
 	}
@@ -83,18 +89,13 @@ func (h *Handler) HandleEvent(ctx types.Context, event *v1.Event, deleted bool) 
 		logrus.Errorf("Failed to get node '%s': %s", event.Source.Host, err)
 		return err
 	}
-//	h.createNewNodeFenceObject(node, nil)
+	h.CreateFencingRequest(node, event.Reeason)
 	return nil
 }
 
-func (h *Handler) HandleFencingSet(ctx types.Context, set *v1alpha1.FencingSet, deleted bool) error {
-	// Anything to actually do?
-	err := action.Create(newbusyBoxPod(set))
-	if err != nil && !errors.IsAlreadyExists(err) {
-		logrus.Errorf("Failed to create busybox pod : %v", err)
-		return err
-	}
-	return nil
+func (h *Handler) dirtyVolumesForNode(node v1.Node) []v1.Volume {
+	// Might be interesting to implement/use at some point
+	return []v1.Volume{}
 }
 
 func (h *Handler) listPods(node *v1.Node) (error, []v1.Pod) {
@@ -159,7 +160,6 @@ func (h *Handler) isPodDirty(pod v1.Pod) bool {
 	return dirty
 }
 
-
 func (h *Handler) isNodeDirty(node *v1.Node, condition v1.NodeCondition) bool {
 	dirty := false
 	if v1.NodeReady == condition.Type && v1.ConditionUnknown == condition.Status {
@@ -179,7 +179,79 @@ func (h *Handler) isNodeDirty(node *v1.Node, condition v1.NodeCondition) bool {
 	return dirty
 }
 
-func newFencingRequest(node *v1.Node) *v1alpha1.FencingRequest {
+func (h *Handler) listFencingRequests(node *v1.Node, name string) (error, []v1.FencingRequest) {
+	requestList := &v1alpha.FencingRequestList{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "FencingRequest",
+			APIVersion: "v1alpha1",
+		},
+	}
+
+	var sel
+	if len(name) > 0 {
+		sel = fmt.Sprintf("spec.target=%s,name=%s", node.Name, name)
+	} else {
+		sel = fmt.Sprintf("spec.target=%s", node.Name)
+	}
+	sel := fmt.Sprintf("spec.target=%s", node.Name)
+	opt := &metav1.ListOptions{FieldSelector: sel}
+	err := query.List("--all-namespaces", pods, query.WithListOptions(opt))
+	if err != nil {
+		logrus.Errorf("Failed to get fencing request list: %v", err)
+	}
+	return err, requestList.Items
+}
+
+func (h *Handler) DeleteFencingRequest(node *v1.Node, name string) error {
+	// Delete a specific request or all for the supplied node
+	_, requests := listFencingRequests(node, name) 
+	for _, request := range requests {
+		err := action.Delete(request)
+		if err != nil {
+			logrus.Errorf("Failed to delete fencing request %v: %v", request.UID, err)
+		}
+	}
+}
+
+func (h *Handler) CreateFencingRequest(node *v1.Node, cause string) error {
+
+	// Look for any existing FencingRequests, only create a new one if not found
+	_, requests := listFencingRequests(node, name) 
+	for _, request := range requests {
+		if request.Status.Complete {
+			logrus.Infof("Node %s is already scheduled for fencing by %v", node.UID, request.Name)
+			return nil
+		}
+	}
+	
+	backoff := wait.Backoff{
+		Duration: 1 * time.Second,
+		Factor:   1.2,
+		Steps:    5,
+	}
+
+	request := newFencingRequest(node, cause)
+
+	err := wait.ExponentialBackoff(backoff, func() (bool, error) {
+		err := action.Create(request)
+		if err != nil && !errors.IsAlreadyExists(err) {
+			// Re-Try it as errors writing to the API server are common
+			return false, err
+		}
+		return true, nil
+	})
+	
+	if err != nil {
+		logrus.Errorf("Failed to create fencing request for node %s: %v", node.Name, err)
+	} else {
+		logrus.Infof("Created fencing request for node %s: %s", node.Name, cause)
+	}
+	return err
+}
+
+
+func newFencingRequest(node *v1.Node, cause string) *v1alpha1.FencingRequest {
+	name := fmt.Sprintf("node-fence-%s-", node.Name)
 	labels := map[string]string{
 		"app": "busy-box",
 	}
@@ -190,90 +262,25 @@ func newFencingRequest(node *v1.Node) *v1alpha1.FencingRequest {
 			APIVersion: "v1alpha1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "fence-all-the-things",
+			GenerateName: name,
 			Namespace:    "default",
 			Labels: labels,
-		},
-		Spec: v1alpha1.FencingRequestSpec{},
-	}
-}
-
-// newbusyBoxPod demonstrates how to create a busybox pod
-func newbusyBoxPod(cr *v1alpha1.FencingSet) *v1.Pod {
-	labels := map[string]string{
-		"app": "busy-box",
-	}
-	return &v1.Pod{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Pod",
-			APIVersion: "v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "busy-box",
-			Namespace:    "default",
+/* TODO: Link to the operator itself
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(cr, schema.GroupVersionKind{
 					Group:   v1alpha1.SchemeGroupVersion.Group,
 					Version: v1alpha1.SchemeGroupVersion.Version,
 					Kind:    "FencingSet",
+					UID:     "FencingSet",
 				}),
 			},
-			Labels: labels,
-		},
-		Spec: v1.PodSpec{
-			Containers: []v1.Container{
-				{
-					Name:    "busybox",
-					Image:   "busybox",
-					Command: []string{"sleep", "3600"},
-				},
-			},
-		},
-	}
-}
-/*
-func (h *Handler) createNewNodeFenceObject(node *v1.Node, pv *v1.PersistentVolume) {
-	nfName := fmt.Sprintf("node-fence-%s", node.Name)
-
-	var result crdv1.NodeFence
-	err := c.crdClient.Get().Resource(crdv1.NodeFenceResourcePlural).Body(nfName).Do().Into(&result)
-	// If no error means the resource already exists
-	if err == nil {
-		glog.Infof("nodefence CRD for node %s already exists", node.Name)
-		return
-	}
-
-	nodeFencing := &crdv1.NodeFence{
-		Metadata: metav1.ObjectMeta{
-			Name: nfName,
-		},
-		Retries:  0,
-		Step:     crdv1.NodeFenceStepIsolation,
-		NodeName: node.Name,
-		Status:   crdv1.NodeFenceConditionNew,
-	}
-
-	backoff := wait.Backoff{
-		Duration: crdPostInitialDelay,
-		Factor:   crdPostFactor,
-		Steps:    crdPostSteps,
-	}
-
-	err = wait.ExponentialBackoff(backoff, func() (bool, error) {
-		err := c.crdClient.Post().
-			Resource(crdv1.NodeFenceResourcePlural).
-			Body(nodeFencing).
-			Do().Into(&result)
-		if err != nil {
-			// Re-Try it as errors writing to the API server are common
-			return false, err
-		}
-		return true, nil
-	})
-	if err != nil {
-		glog.Warningf("failed to post NodeFence CRD object: %v", err)
-	} else {
-		glog.Infof("Posted NodeFence CRD object for node %s", node.Name)
-	}
-}
 */
+		},
+		Spec: v1alpha1.FencingRequestSpec{
+			Target: node.Name,
+			Origin: cause,
+			Operation: "Off",
+			//ValidAfter date.Time `json:"validAfter,omitempty"`
+		},
+	}
+}
