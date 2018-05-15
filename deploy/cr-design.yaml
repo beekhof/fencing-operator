@@ -14,6 +14,10 @@ data:
       mechanisms:
       # The operator attempts sets in order until one succeeds
       # All mechanisms in a set are required to succeed in order for the set to succeed.
+      #
+      # A CLI tool/extension will be provided that allows an admin to
+      # create FencingReques CRs and unfence one way operations like
+      # network and disk based fencing events.
       - driver: openstack
         module: network
         config:
@@ -68,7 +72,7 @@ kind: ConfigMap
 metadata:
   labels:
     app: fencing-operator
-  name: single-host-timed-destructive
+  name: single-host-delayed-destruction # Allow time for a fenced node to be interrogated/debugged or even recover
 data:
   fencing-config: |
     nodeSelector:
@@ -90,7 +94,7 @@ data:
         - password: admin
         - auth_url: https://1.1.1.1:5000
     - set:
-      name: fallback
+      name: nuclear-option
 
       require_after_seconds: 3600
       # If 'openstack-isolate' suceeds then the node has been fenced
@@ -101,12 +105,13 @@ data:
       # If during that 1 hour period the node returns to a healthy
       # state, the additional fencing step will be cancelled.
       #
-      # If 'openstack-isolate' fails, the 'fallback' set will be
+      # If 'openstack-isolate' fails, the 'nuclear-option' set will be
       # initiated immediately.
 
       mechanisms:
       - driver: baremetal
         module: ipmilan
+	action: off  # Support the ability to tell the node to stay down instead of reboot?
         dynamic_config:
         - field: ip
 	  default: 127.0.0.1
@@ -117,3 +122,35 @@ data:
         - user: admin
         secrets:
         - password: ipmi-secret
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app: fencing-operator
+  name: ported-old-example
+data:
+  fencing-config: |
+    methods:
+    - set:
+      name: rhevm
+      mechanisms:
+      - driver: rhevm
+        timeout: 10
+	retries: 5
+	pass_target_as: port
+        config:
+        - ip: ovirt.com  # address to the rhevm management
+        - username: admin@internal
+        - ssl-insecure: true
+        - ssl: true
+        - disable-http-filter: true
+        secrets:
+        - password: secret-fence-method-fence-rhevm-node1
+- kind: Secret
+  apiVersion: v1
+  metadata:
+    name: secret-fence-method-fence-rhevm-node1
+  type: Opaque
+  data:
+    password: MTIz # ecoded password - follow https://kubernetes.io/docs/concepts/configuration/secret/ for more info
