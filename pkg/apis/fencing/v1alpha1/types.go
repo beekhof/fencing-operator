@@ -62,41 +62,32 @@ type FencingSetList struct {
 type FencingSet struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata"`
-	Spec              FencingSetSpec   `json:"spec"`
+	Spec              FencingConfig   `json:"spec"`
 	Status            FencingSetStatus `json:"status,omitempty"`
 }
 
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
-type FencingSetSpec struct {
+type FencingConfig struct {
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
-	Methods    []FencingMechanism `json:"methods"`
-	MethodRefs []v1.LocalObjectReference `json:"methodRefs"`
+	Methods    []FencingMethod `json:"methods"`
 }
-
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-
-type FencingMethodList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata"`
-	Items           []FencingMethod `json:"items"`
-}
-
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 type FencingMethod struct {
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata"`
-	Spec              FencingMethodSpec   `json:"spec"`
-	Status            FencingMethodStatus `json:"status,omitempty"`
-}
-
-type FencingMethodSpec struct {
+	Name string `json:"name"`
+	RequireAfterSeconds *int32 `json:"requireAfterSeconds,omitempty"`
 	Mechansims []FencingMechanism `json:"mechanisms"`
 }
 
 type FencingMechanism struct {
-	Driver         string `json:"driver"`
-	Module         string `json:"module"`
+	Driver    string `json:"driver"`
+	Module    string `json:"module,omitempty"`
+
+	PassTargetAs  string `json:"passTargetAs,omitempty"`
+
+	Retries         int32 `json:"retries"`
+	TimeoutSeconds *int32 `json:"timeoutSeconds,omitempty"`
+	
 	Config         map[string]string `json:"config"`
 	DynamicConfig  []FencingDynamicConfig `json:"dynamicConfig"`
 

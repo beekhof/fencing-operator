@@ -9,8 +9,7 @@ data:
     nodeSelector:
     - spec.Name: somehost
     methods:
-    - set:
-      name: openstack-isolate
+    - name: openstack-isolate
       mechanisms:
       # The operator attempts sets in order until one succeeds
       # All mechanisms in a set are required to succeed in order for the set to succeed.
@@ -40,8 +39,7 @@ metadata:
 data:
   fencing-config: |
     methods:
-    - set:
-      name: openstack-power
+    - name: openstack-power
       mechanisms:
       - driver: openstack
         config:
@@ -49,8 +47,7 @@ data:
         - auth_url: https://1.1.1.1:5000
         secrets:
         - password: overcloud-secret
-    - set:
-      name: fallback
+    - name: fallback
       mechanisms:
       - driver: baremetal
         module: ipmilan
@@ -59,7 +56,7 @@ data:
 	  default: 127.0.0.1
 	  # If no default is supplied, an error will be logged and the
           # mechanism will be considered to have failed
-	  map:
+	  values:
           - somehost: 1.2.3.4
           - otherhost: 1.2.3.5
         config:
@@ -78,8 +75,7 @@ data:
     nodeSelector:
     - spec.Name: somehost
     methods:
-    - set:
-      name: openstack-isolate
+    - name: openstack-isolate
       mechanisms:
       - driver: openstack
         module: network
@@ -93,10 +89,9 @@ data:
         - user: admin
         - password: admin
         - auth_url: https://1.1.1.1:5000
-    - set:
-      name: nuclear-option
+    - name: nuclear-option
 
-      require_after_seconds: 3600
+      requireAfterSeconds: 3600
       # If 'openstack-isolate' suceeds then the node has been fenced
       # and recovery can continue, but the operator will record that
       # this set (bare metal fencing) is still required after
@@ -115,7 +110,7 @@ data:
         dynamic_config:
         - field: ip
 	  default: 127.0.0.1
-          map:
+          values:
           - somehost: 1.2.3.4
           - otherhost: 1.2.3.5
         config:
@@ -132,13 +127,12 @@ metadata:
 data:
   fencing-config: |
     methods:
-    - set:
-      name: rhevm
+    - name: rhevm
       mechanisms:
       - driver: rhevm
-        timeout: 10
+        timeoutSeconds: 10
 	retries: 5
-	pass_target_as: port
+	passTargetAs: port
         config:
         - ip: ovirt.com  # address to the rhevm management
         - username: admin@internal
