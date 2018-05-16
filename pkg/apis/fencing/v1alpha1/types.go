@@ -9,9 +9,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+type FencingResult string
 const (
 	// NodeFenceConditionRunning means the node fencing is being executed
-	RequestFailedNoConfig = "Running"
+	RequestFailedNoConfig FencingResult = "NoConfig"
+	RequestFailed FencingResult = "GivingUp"
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -47,7 +49,7 @@ type FencingRequestSpec struct {
 type FencingRequestStatus struct {
 	Complete  bool  `json:"complete"`
 	Result    int  `json:"result"`
-	Config *v1.LocalObjectReference `json:"config"`
+	Config    string `json:"config"`
 	ActiveMethod *string `json:"activeMethod"`
 	Updates []FencingRequestStatusUpdate `json:"updates,omitempty"`
 }
