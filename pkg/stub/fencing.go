@@ -7,6 +7,8 @@ import (
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/operator-framework/operator-sdk/pkg/sdk/action"
 )
 
 const {
@@ -14,13 +16,17 @@ const {
 }
 
 func (h *Handler) HandleConfigMap(ctx types.Context, node *v1.Node, deleted bool) error {
-	// Maintain a list of FencingConfig objects for HandleFencingRequest() to use
+	// TODO: Maintain a list of FencingConfig objects for HandleFencingRequest() to use
 	return nil
 }
 
 func (h *Handler) HandleFencingRequest(ctx types.Context, req *v1alpha1.FencingRequest, deleted bool) error {
 	if deleted {
-		// Cancel any active Jobs and Pods
+		// By default Jobs associated with this request will
+		// be deleted as well due to the ownerRef
+		//
+		// If they're still around its because the caller specified
+		// --cascade=false which should be respected
 		return nil
 	}
 
@@ -38,15 +44,15 @@ func (h *Handler) HandleFencingRequest(ctx types.Context, req *v1alpha1.FencingR
 		return err
 	}
 
+	err, job := createFencingJob(req, config, method)
+
 	backoff := wait.Backoff{
 		Duration: 1 * time.Second,
 		Factor:   1.2,
 		Steps:    5,
 	}
 
-	err, job := createFencingJob(req, config, method)
-
-	err := wait.ExponentialBackoff(backoff, func() (bool, error) {
+	err = wait.ExponentialBackoff(backoff, func() (bool, error) {
 		err := action.Create(job)
 		if err != nil && !errors.IsAlreadyExists(err) {
 			// Retry it as errors writing to the API server are common
@@ -64,7 +70,7 @@ func (h *Handler) HandleFencingRequest(ctx types.Context, req *v1alpha1.FencingR
 }
 
 func (h *Handler) chooseFencingConfig(req *v1alpha1.FencingRequest) error, *v1alpha1.FencingConfig {
-	// Prefer req.Status.Config
+	// TODO: Prefer req.Status.Config
 	return fmt.Errorf("No valid config for %v", req.Target), nil
 }
 
@@ -74,6 +80,7 @@ func (h *Handler) chooseFencingMethod(req *v1alpha1.FencingRequest, config *v1al
 		if req.Status.ActiveMethod == nil {
 			return nil, method
 		} else if req.Status.ActiveMethod == method.Name {
+			// TODO: If its still running, then wait
 			next = true
 		} else if next {
 			return nil, method
@@ -82,15 +89,12 @@ func (h *Handler) chooseFencingMethod(req *v1alpha1.FencingRequest, config *v1al
 	return error("No remaining methods available"), nil
 }
 
+
 func (h *Handler) createFencingJob(req *v1alpha1.FencingRequest, config *v1alpha1.FencingConfig, method *v1alpha1.FencingMethod) error {
 	// Create a Job with a container for each mechanism
 
-	labels := map[string]string{
-		"app": "fencing-operator",
-		"method": method.Name,
-		"target": req.Target,
-		"request": req.Name,
-	}
+	labels := req.RequestLabels()
+	labels["method"] = method.Name
 
 	volumes := []v1.Volumes{}
 	// Create volumes for any sensitive parameters that are stored as k8s secrets
@@ -163,13 +167,14 @@ func containerFromMechanism(mechanism *v1alpha1.FencingMethod) *v1.Pod {
 				Image:   "busybox",
 				Command: []string{"echo", fmt.Sprintf("/sbin/fence_%v --some-args=and --values", mechanism.Module)},
 			},
-	default:
-		return &v1.Container{
-			{
-				Name:    "busybox",
-				Image:   "busybox",
-				Command: []string{"echo", fmt.Sprintf("%v/%v complete", mechanism.Driver, mechanism.Module)},
-			},
+		}
+	}
+	return &v1.Container{
+		{
+			Name:    "busybox",
+			Image:   "busybox",
+			Command: []string{"echo", fmt.Sprintf("%v/%v complete", mechanism.Driver, mechanism.Module)},
+		},
 	}
 }
 
@@ -178,12 +183,75 @@ func (fr *FencingRequest) AddResult(result int32, err error) {
 		Timestamp: time.Now(),
 		Message: fmt.Sprintf("%v %v", result, err),
 	})
+	fr.Update("AddResult")
 }
 
 func (fr *FencingRequest) SetFinalResult(result int32, err error) {
 	fr.Status.Complete = true
 	fr.Status.Result = result
 	fr.AddResult(result, err)
+}
 
-	// TODO: Now update the CR
+func (fr *FencingRequest) Update(prefix string) error {
+// Do we need to modify a copy so we can test for changes before doing an update?
+//	if reflect.DeepEqual(fr.Status, saved.status) {
+//		return nil
+//	}
+
+	backoff := wait.Backoff{
+		Duration: 1 * time.Second,
+		Factor:   1.2,
+		Steps:    5,
+	}
+
+	err := wait.ExponentialBackoff(backoff, func() (bool, error) {
+		err := action.Update(fr)
+		if err != nil && !errors.IsAlreadyExists(err) {
+			// Retry it as errors writing to the API server are common
+			return false, err
+		}
+		return true, nil
+	})
+	
+	if err != nil {
+		logrus.Errorf("%v: failed to update CR %v: %v", prefix, fr.Name, err)
+	} else {
+		logrus.Debugf("%v: updated CR %v", prefix, fr.Name)
+	}
+
+//	saved = fr
+	return err
+}
+
+
+func (fr *FencingRequest)RequestLabels() map[string]string {
+	return map[string]string{
+		"app": "fencing-operator",
+		"target": req.Target,
+		"request": req.Name,
+	}
+}
+
+
+func (h *Handler) ListJobs() (error, []v1.Job) {
+	jobLabels := map[string]string{
+		"app": "fencing-operator",
+		"target": req.Target,
+	}
+	
+	jobs := &v1.JobList{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Job",
+			APIVersion: "v1",
+		},
+	}
+
+	sel := fmt.Sprintf("spec.nodeName=%s", node.Name)
+//	opt := &metav1.ListOptions{LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"foo": "bar"}},}
+	opt := &metav1.ListOptions{MatchLabels: jobLabels}
+	err := query.List("--all-namespaces", jobs, query.WithListOptions(opt))
+	if err != nil {
+		logrus.Errorf("failed to get job list: %v", err)
+	}
+	return err, jobs.Items
 }
