@@ -36,6 +36,8 @@ type FencingRequestSpec struct {
 	Origin    string    `json:"origin,omitempty"`	
 	Operation string    `json:"operation,omitempty"`   // On, Off, Cycle
 
+	PodList []string `json:"podList,omitempty"` // A list of Pod's affected by this fencing event
+
 	// Allow actions to be scheduled in the future
 	//
 	// A _failed_ node returning to a healthy state cancels any

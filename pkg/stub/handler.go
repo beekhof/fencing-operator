@@ -56,12 +56,12 @@ func (h *Handler) Handle(ctx types.Context, event types.Event) error {
 func (h *Handler) HandleNode(ctx types.Context, node *v1.Node, deleted bool) error {
 	if deleted {
 		logrus.Errorf("Node deleted : %v ", node)
-		h.CancelFencingRequests(node, "")
+		CancelFencingRequests(node, "")
 		
 	} else  {
 		for _, condition := range node.Status.Conditions {
-			if h.isNodeDirty(node, condition) {
-				h.CreateFencingRequest(node, fmt.Sprintf("%v", condition))
+			if isNodeDirty(node, condition) {
+				CreateFencingRequest(node, fmt.Sprintf("%v", condition))
 				return nil // No need to continue processing
 			}
 		}
@@ -89,16 +89,16 @@ func (h *Handler) HandleEvent(ctx types.Context, event *v1.Event, deleted bool) 
 		logrus.Errorf("Failed to get node '%s': %s", event.Source.Host, err)
 		return err
 	}
-	h.CreateFencingRequest(node, event.Reason)
+	CreateFencingRequest(node, event.Reason)
 	return nil
 }
 
-func (h *Handler) dirtyVolumesForNode(node v1.Node) []v1.Volume {
+func dirtyVolumesForNode(node v1.Node) []v1.Volume {
 	// Might be interesting to implement/use at some point
 	return []v1.Volume{}
 }
 
-func (h *Handler) listPods(node *v1.Node) (error, []v1.Pod) {
+func listPods(node *v1.Node) (error, []v1.Pod) {
 	pods := &v1.PodList{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Pod",
@@ -115,7 +115,7 @@ func (h *Handler) listPods(node *v1.Node) (error, []v1.Pod) {
 	return err, pods.Items
 }
 
-func (h *Handler) dirtyVolumes(pod v1.Pod) []v1.Volume {
+func dirtyVolumes(pod v1.Pod) []v1.Volume {
 	volumes := []v1.Volume{}
 	for _, vol := range pod.Spec.Volumes {
 		if vol.VolumeSource.PersistentVolumeClaim != nil {
@@ -125,9 +125,9 @@ func (h *Handler) dirtyVolumes(pod v1.Pod) []v1.Volume {
 	return volumes
 }
 
-func (h *Handler) isPodDirty(pod v1.Pod) bool {
+func isPodDirty(pod v1.Pod) bool {
 	dirty := false
-	volumes := h.dirtyVolumes(pod)
+	volumes := dirtyVolumes(pod)
 
 	if len(volumes) > 0 {
 		dirty = true
@@ -160,13 +160,13 @@ func (h *Handler) isPodDirty(pod v1.Pod) bool {
 	return dirty
 }
 
-func (h *Handler) isNodeDirty(node *v1.Node, condition v1.NodeCondition) bool {
+func isNodeDirty(node *v1.Node, condition v1.NodeCondition) bool {
 	dirty := false
 	if v1.NodeReady == condition.Type && v1.ConditionUnknown == condition.Status {
 		// https://kubernetes.io/docs/concepts/architecture/nodes/#condition
-		_, pods := h.listPods(node)
+		_, pods := listPods(node)
 		for _, pod := range pods {
-			if h.isPodDirty(pod) {
+			if isPodDirty(pod) {
 				dirty = true
 			}
 		}
@@ -179,7 +179,7 @@ func (h *Handler) isNodeDirty(node *v1.Node, condition v1.NodeCondition) bool {
 	return dirty
 }
 
-func (h *Handler) listFencingRequests(node *v1.Node, name string) (error, []v1alpha1.FencingRequest) {
+func listFencingRequests(node *v1.Node, name string) (error, []v1alpha1.FencingRequest) {
 	requestList := &v1alpha1.FencingRequestList{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "FencingRequest",
@@ -201,9 +201,9 @@ func (h *Handler) listFencingRequests(node *v1.Node, name string) (error, []v1al
 	return err, requestList.Items
 }
 
-func (h *Handler) CancelFencingRequests(node *v1.Node, name string) error {
+func CancelFencingRequests(node *v1.Node, name string) error {
 	// Delete a specific request or all for the supplied node
-	_, requests := h.listFencingRequests(node, name) 
+	_, requests := listFencingRequests(node, name) 
 	for _, request := range requests {
 		err := action.Delete(&request)
 		if err != nil {
@@ -213,10 +213,10 @@ func (h *Handler) CancelFencingRequests(node *v1.Node, name string) error {
 	return nil
 }
 
-func (h *Handler) CreateFencingRequest(node *v1.Node, cause string) error {
+func CreateFencingRequest(node *v1.Node, cause string) error {
 
 	// Look for any existing FencingRequests, only create a new one if not found
-	_, requests := h.listFencingRequests(node, "") 
+	_, requests := listFencingRequests(node, "") 
 	for _, request := range requests {
 		if request.Status.Complete {
 			logrus.Infof("Node %s is already scheduled for fencing by %v", node.UID, request.Name)
@@ -251,11 +251,21 @@ func (h *Handler) CreateFencingRequest(node *v1.Node, cause string) error {
 
 
 func newFencingRequest(node *v1.Node, cause string) *v1alpha1.FencingRequest {
+	affected := []string{}
 	name := fmt.Sprintf("node-fence-%s-", node.Name)
 	labels := map[string]string{
 		"app": "busy-box",
 	}
-	// volumes := h.dirtyVolumes(pod) // Do anything with these perhaps?  Disk fencing?
+
+	// TODO: Here or when fencing completes and we delete the pods?
+	_, pods := listPods(node)
+	for _, pod := range pods {
+		if isPodDirty(pod) {
+			affected = append(affected, pod.Name)
+		}
+	}
+	
+	// volumes := dirtyVolumes(pod) // Do anything with these perhaps?  Disk fencing?
 	return &v1alpha1.FencingRequest{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "FencingRequest",
@@ -280,7 +290,8 @@ func newFencingRequest(node *v1.Node, cause string) *v1alpha1.FencingRequest {
 			Target: node.Name,
 			Origin: cause,
 			Operation: "Off",
-			//ValidAfter date.Time `json:"validAfter,omitempty"`
+			//ValidAfter date.Time `json:"validAfter,omitempty"` // TODO: Implement
+			PodList: affected,
 		},
 	}
 }
