@@ -14,6 +14,7 @@ const (
 	// NodeFenceConditionRunning means the node fencing is being executed
 	RequestFailedNoConfig FencingResult = "NoConfig"
 	RequestFailed FencingResult = "GivingUp"
+	MethodFailed FencingResult = "MethodFailed"
 )
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -56,8 +57,10 @@ type FencingRequestStatus struct {
 
 type FencingRequestStatusUpdate struct {
 	Timestamp date.Time `json:"timestamp"`
+	Method    string `json:"method,omitempty"`
 	Message   string `json:"message"`
 	Output    string `json:"output"`
+	Error     error  `json:"error,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -94,6 +97,7 @@ type FencingMethod struct {
 type FencingMechanism struct {
 	Driver    string `json:"driver"`
 	Module    string `json:"module,omitempty"`
+	Image     string `json:"image"`
 
 	PassTargetAs  string `json:"passTargetAs,omitempty"`
 

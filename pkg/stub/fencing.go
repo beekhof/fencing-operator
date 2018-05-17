@@ -63,8 +63,7 @@ func (h *Handler) HandleFencingRequest(ctx types.Context, req *v1alpha1.FencingR
 		return nil
 	}
 
-	err, config := chooseFencingConfig(req)
-	if err != nil {
+	if err, config := chooseFencingConfig(req); err != nil {
 		logrus.Errorf("No valid fencing configurations for %v (%v)", req.Target, req.Name)
 		req.SetFinalResult(v1alpha1.RequestFailedNoConfig, err)
 		return err
@@ -75,12 +74,15 @@ func (h *Handler) HandleFencingRequest(ctx types.Context, req *v1alpha1.FencingR
 		logrus.Errorf("All configured fencing methods have failed for %v (%v)", req.Target, req.Name)
 		req.SetFinalResult(v1alpha1.RequestFailed, err)
 		return err
-	} else if h.isFencingMethodActive(req, config, method) {
+	} else if isFencingMethodActive(req, config, method) {
 		logrus.Infof("Waiting until %v/%v completes for %v", config.Name, method.Name, req.Name)
 		return nil
 	}
 
-	err, job := createFencingJob(req, config, method)
+	if err, job := createFencingJob(req, config, method); err != nil {
+		req.AddResult(method.Name, v1alpha1.RequestFailed, err)
+		return err
+	}
 
 	backoff := wait.Backoff{
 		Duration: 1 * time.Second,
@@ -89,8 +91,7 @@ func (h *Handler) HandleFencingRequest(ctx types.Context, req *v1alpha1.FencingR
 	}
 
 	err = wait.ExponentialBackoff(backoff, func() (bool, error) {
-		err := action.Create(job)
-		if err != nil && !errors.IsAlreadyExists(err) {
+		if err := action.Create(job); err != nil && !errors.IsAlreadyExists(err) {
 			// Retry it as errors writing to the API server are common
 			return false, err
 		}
@@ -114,7 +115,7 @@ func nodeInList(name string, nodes []*v1.Node) bool {
 	return false
 }
 
-func (h *Handler) chooseFencingConfig(req *v1alpha1.FencingRequest) error, *v1alpha1.FencingConfig {
+func chooseFencingConfig(req *v1alpha1.FencingRequest) error, *v1alpha1.FencingConfig {
 	labelThreshold := -1
 	var chosen *v1alpha1.FencingConfig = nil
 
@@ -146,7 +147,7 @@ func (h *Handler) chooseFencingConfig(req *v1alpha1.FencingRequest) error, *v1al
 	return fmt.Errorf("No valid config for %v", req.Target), nil
 }
 
-func (h *Handler) isFencingMethodActive(req *v1alpha1.FencingRequest, config *v1alpha1.FencingConfig, method *v1alpha1.FencingMethod) bool  {
+func isFencingMethodActive(req *v1alpha1.FencingRequest, config *v1alpha1.FencingConfig, method *v1alpha1.FencingMethod) bool  {
 	err, jobs := ListJobs(req, method.Name)
 	for _, job := range jobs {
 		if job.Status.Active > 0 {
@@ -156,13 +157,13 @@ func (h *Handler) isFencingMethodActive(req *v1alpha1.FencingRequest, config *v1
 	return false
 }
 
-func (h *Handler) chooseFencingMethod(req *v1alpha1.FencingRequest, config *v1alpha1.FencingConfig) error, *v1alpha1.FencingMethod {
+func chooseFencingMethod(req *v1alpha1.FencingRequest, config *v1alpha1.FencingConfig) error, *v1alpha1.FencingMethod {
 	// TODO: Verify that yaml ordering of methods is preserved
 	next := false
 	for _, method := range config.Methods {
 		if req.Status.ActiveMethod == nil {
 			return nil, method
-		} else if req.Status.ActiveMethod == method.Name && h.isFencingMethodActive(req, config, method) {
+		} else if req.Status.ActiveMethod == method.Name && isFencingMethodActive(req, config, method) {
 			return nil, method
 			
 		} else if req.Status.ActiveMethod == method.Name {
@@ -175,7 +176,7 @@ func (h *Handler) chooseFencingMethod(req *v1alpha1.FencingRequest, config *v1al
 	return fmt.Errorf("No remaining methods available"), nil
 }
 
-func (h *Handler) createFencingJob(req *v1alpha1.FencingRequest, config *v1alpha1.FencingConfig, method *v1alpha1.FencingMethod) error {
+func createFencingJob(req *v1alpha1.FencingRequest, config *v1alpha1.FencingConfig, method *v1alpha1.FencingMethod) error {
 	// Create a Job with a container for each mechanism
 
 	labels := req.JobLabels(method.Name)
@@ -195,8 +196,10 @@ func (h *Handler) createFencingJob(req *v1alpha1.FencingRequest, config *v1alpha
 
 	containers := []v1.Container{}
 	for _, mech := range method.Mechanisms {
-		c := containerFromMechanism(mech)
-
+		err, c := mech.CreateContainer(req.Target, fencingSecretsDir)
+		if err != nil {
+			return fmt.Errorf("Method %s aborted: %v", method.Name, err)
+		}
 		// Mount the secrets into the container so they can be easily retrieved
 		for key, s := range mech.Secrets {
 			c.VolumeMounts = append(c.VolumeMounts, v1.VolumeMount{
@@ -242,30 +245,12 @@ func (h *Handler) createFencingJob(req *v1alpha1.FencingRequest, config *v1alpha
 	}
 }
 
-func containerFromMechanism(mechanism *v1alpha1.FencingMethod) *v1.Pod {
-	switch mechanism.Driver {
-	case "baremetal":
-		return &v1.Container{
-			{
-				Name:    "busybox",
-				Image:   "busybox",
-				Command: []string{"echo", fmt.Sprintf("/sbin/fence_%v --some-args=and --values", mechanism.Module)},
-			},
-		}
-	}
-	return &v1.Container{
-		{
-			Name:    "busybox",
-			Image:   "busybox",
-			Command: []string{"echo", fmt.Sprintf("%v/%v complete", mechanism.Driver, mechanism.Module)},
-		},
-	}
-}
-
-func (fr *FencingRequest) AddResult(result int32, err error) {
+func (fr *FencingRequest) AddResult(result int32, method string, err error) {
 	fr.Updates = append(fr.Updates, &v1alpha1.FencingRequestStatusUpdate {
 		Timestamp: time.Now(),
-		Message: fmt.Sprintf("%v %v", result, err),
+		Method: method,
+		Error: err,
+		Message: fmt.Sprintf("%v", result),
 	})
 	fr.Update("AddResult")
 }
@@ -273,14 +258,15 @@ func (fr *FencingRequest) AddResult(result int32, err error) {
 func (fr *FencingRequest) SetFinalResult(result int32, err error) {
 	fr.Status.Complete = true
 	fr.Status.Result = result
-	fr.AddResult(result, err)
+	fr.AddResult(nil, result, err)
 }
 
 func (fr *FencingRequest) Update(prefix string) error {
-// Do we need to modify a copy so we can test for changes before doing an update?
-//	if reflect.DeepEqual(fr.Status, saved.status) {
-//		return nil
-//	}
+	// Do we need to modify a copy so we can test for changes before doing an update?
+	// Eg.
+	//	if reflect.DeepEqual(fr.Status, saved.status) {
+	//		return nil
+	//	}
 
 	backoff := wait.Backoff{
 		Duration: 1 * time.Second,
@@ -369,9 +355,9 @@ func newFencingMethodFromConfig(cfg *config.Config) error, *v1alpha1.FencingMeth
 	}
 
 	return nil, &v1alpha1.FencingMethod{
-		Name:       cmethod.GetString("name"),
+		Name:       cfg.GetString("name"),
 		Retries:    1,
-		RequireAfterSeconds: cmethod.GetInt("requireAfterSeconds"),
+		RequireAfterSeconds: cfg.GetInt("requireAfterSeconds"),
 		Mechanisms: mechanisms,
 	}
 //	method.GetSliceOfStrings("namespaces"),
@@ -392,6 +378,7 @@ func newFencingMechanismFromConfig(cfg *config.Config) error, *v1alpha1.FencingM
 	return nil, &v1alpha1.FencingMechanism{
 		Driver:         cfg.GetString("driver"),
 		Module:         cfg.GetString("module"),
+		Image:          cfg.GetString("image"),
 		PassTargetAs:   cfg.GetString("passTargetAs"),
 		TimeoutSeconds: cfg.GetInt("timeoutSeconds"),
 		Config:         cfg.GetSubConfigArray("config"),
@@ -400,7 +387,7 @@ func newFencingMechanismFromConfig(cfg *config.Config) error, *v1alpha1.FencingM
 	}
 }
 
-func newDynamicAttributeFromConfig(cfg *config.Config) error, *v1alpha1.FencingMechanism  {
+func newDynamicAttributeFromConfig(cfg *config.Config) error, *v1alpha1.FencingDynamicConfig  {
 	return nil, &v1alpha1.FencingDynamicConfig{
 		Field:   cfg.GetString("field"),
 		Default: cfg.GetString("default"),

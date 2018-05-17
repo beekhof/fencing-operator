@@ -11,6 +11,7 @@ import (
 	sdkVersion "github.com/operator-framework/operator-sdk/version"
 
 	"github.com/sirupsen/logrus"
+	"github.com/beekhof/fencing-operator/pkg/constants"
 )
 
 var (
@@ -49,6 +50,10 @@ func main() {
 	name = os.Getenv(constants.EnvOperatorPodName)
 	if len(name) == 0 {
 		logrus.Fatalf("must set env (%s)", constants.EnvOperatorPodName)
+	}
+	image = os.Getenv(constants.EnvOperatorPodImage)
+	if len(image) == 0 {
+		logrus.Fatalf("must set env (%s)", constants.EnvOperatorPodImage)
 	}
 
 	printVersion()
