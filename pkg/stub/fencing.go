@@ -2,6 +2,7 @@ package stub
 
 import (
 	"github.com/beekhof/fencing-operator/pkg/apis/fencing/v1alpha1"
+	"github.com/beekhof/fencing-operator/pkg/config"
 
 	"github.com/sirupsen/logrus"
 	"k8s.io/api/core/v1"
@@ -16,11 +17,39 @@ const {
 }
 
 var {
-	configList := map[string]*FencingConfig{}
+	fencingConfigs := map[string]*FencingConfig{}
 }
 
-func (h *Handler) HandleConfigMap(ctx types.Context, node *v1.Node, deleted bool) error {
-	// TODO: Maintain a list of FencingConfig objects for HandleFencingRequest() to use
+func (h *Handler) HandleConfigMap(ctx types.Context, configmap *v1.ConfigMap, deleted bool) error {
+	// Maintain a list of FencingConfig objects for HandleFencingRequest() to use
+
+	if deleted {
+		logrus.Infof("Deleting %v", configmap.Name)
+		fencingConfigs[configmap.Name] = nil
+		return nil
+	}
+
+	if fencingConfigs[configmap.Name] != nil {
+		logrus.Infof("Updating %v", configmap.Name)
+	}
+
+	methods := []*v1alpha1.FencingMethod{}
+	cfg :=  config.NewConfigFromString(configmap.Data["fencing-config"])
+
+	logrus.Infof("Creating %v", configmap.Name)
+	for _, subcfg := range cfg.GetSubConfigArray("methods") {
+		err, m := newFencingMethodFromConfig(subcfg)
+		if err != nil {
+			return err
+		}
+		methods = append(methods, m)
+	}
+
+	fencingConfigs[configmap.Name] = &v1alpha1.FencingConfig{
+		NodeSelector: cfg.GetSubConfigArray("nodeSelector"),
+		Methods: methods,
+	}
+	logrus.Infof("Created %v: %v", configmap.Name, fencingConfigs[configmap.Name])
 	return nil
 }
 
@@ -36,17 +65,18 @@ func (h *Handler) HandleFencingRequest(ctx types.Context, req *v1alpha1.FencingR
 
 	err, config := chooseFencingConfig(req)
 	if err != nil {
-		logrus.Errorf("No valid fencing configurations for %v (%v)", req.Target, req.UID)
+		logrus.Errorf("No valid fencing configurations for %v (%v)", req.Target, req.Name)
 		req.SetFinalResult(v1alpha1.RequestFailedNoConfig, err)
 		return err
 	}
 
 	err, method := chooseFencingMethod(req, config)
 	if err != nil {
-		logrus.Errorf("All configured fencing methods have failed for %v (%v)", req.Target, req.UID)
+		logrus.Errorf("All configured fencing methods have failed for %v (%v)", req.Target, req.Name)
 		req.SetFinalResult(v1alpha1.RequestFailed, err)
 		return err
 	} else if h.isFencingMethodActive(req, config, method) {
+		logrus.Infof("Waiting until %v/%v completes for %v", config.Name, method.Name, req.Name)
 		return nil
 	}
 
@@ -89,7 +119,7 @@ func (h *Handler) chooseFencingConfig(req *v1alpha1.FencingRequest) error, *v1al
 	var chosen *v1alpha1.FencingConfig = nil
 
 	if req.Status.Config != nil {
-		chosen = configList[req.Status.Config]
+		chosen = fencingConfigs[req.Status.Config]
 		if chosen != nil {
 			return nil, chosen
 		}
@@ -97,7 +127,7 @@ func (h *Handler) chooseFencingConfig(req *v1alpha1.FencingRequest) error, *v1al
 
 	req.Status.Config = nil
 
-	for name, config := range configList {
+	for name, config := range fencingConfigs {
 		if len(config.NodeSelector) > labelThreshold {
 			err, nodes := ListNodes(config.NodeSelector)
 			if err == nil && nodeInList(req.Target, nodes) {
@@ -327,3 +357,54 @@ func ListJobs(req *v1alpha1.FencingRequest, method *string) (error, []v1.Job) {
 	}
 	return err, jobs.Items
 }
+
+func newFencingMethodFromConfig(cfg *config.Config) error, *v1alpha1.FencingMethod  {
+	mechanisms := []*v1alpha1.FencingMechanism{}
+	for _, subcfg := range cfg.GetSubConfigArray("mechanisms") {
+		err, m := newFencingMechanismFromConfig(subcfg)
+		if err != nil {
+			return err, nil
+		}
+		mechanisms = append(mechanisms, m)
+	}
+
+	return nil, &v1alpha1.FencingMethod{
+		Name:       cmethod.GetString("name"),
+		Retries:    1,
+		RequireAfterSeconds: cmethod.GetInt("requireAfterSeconds"),
+		Mechanisms: mechanisms,
+	}
+//	method.GetSliceOfStrings("namespaces"),
+//	method.GetBool("fail_on_error"),
+//	method.GetString("openshift.namespace")
+}
+
+func newFencingMechanismFromConfig(cfg *config.Config) error, *v1alpha1.FencingMechanism  {
+	dcs := []*v1alpha1.FencingDynamicConfig{}
+	for _, subcfg := range cfg.GetSubConfigArray("dynamicConfig") {
+		err, d := newDynamicAttributeFromConfig(subcfg)
+		if err != nil {
+			return err, nil
+		}
+		dcs = append(dcs, d)
+	}
+
+	return nil, &v1alpha1.FencingMechanism{
+		Driver:         cfg.GetString("driver"),
+		Module:         cfg.GetString("module"),
+		PassTargetAs:   cfg.GetString("passTargetAs"),
+		TimeoutSeconds: cfg.GetInt("timeoutSeconds"),
+		Config:         cfg.GetSubConfigArray("config"),
+		DynamicConfig:  dcs,
+		Secrets:        cfg.GetSubConfigArray("secrets"),
+	}
+}
+
+func newDynamicAttributeFromConfig(cfg *config.Config) error, *v1alpha1.FencingMechanism  {
+	return nil, &v1alpha1.FencingDynamicConfig{
+		Field:   cfg.GetString("field"),
+		Default: cfg.GetString("default"),
+		Values:  cfg.GetSubConfigArray("values"),
+	}
+}
+

@@ -14,7 +14,7 @@ const (
 	// NodeFenceConditionRunning means the node fencing is being executed
 	RequestFailedNoConfig FencingResult = "NoConfig"
 	RequestFailed FencingResult = "GivingUp"
-}
+)
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
@@ -49,7 +49,7 @@ type FencingRequestSpec struct {
 type FencingRequestStatus struct {
 	Complete  bool  `json:"complete"`
 	Result    int  `json:"result"`
-	Config    string `json:"config"`
+	Config    *string `json:"config"`
 	ActiveMethod *string `json:"activeMethod"`
 	Updates []FencingRequestStatusUpdate `json:"updates,omitempty"`
 }
@@ -107,7 +107,8 @@ type FencingMechanism struct {
 	// 
 	// See https://kubernetes.io/docs/concepts/configuration/secret/ and/or
 	// http://kubernetes.io/docs/user-guide/images#specifying-imagepullsecrets-on-a-pod
-	Secrets map[string]v1.LocalObjectReference `json:"secrets"`
+//	Secrets map[string]v1.LocalObjectReference `json:"secrets"`
+	Secrets map[string]string `json:"secrets"`
 }
 
 type FencingDynamicConfig struct {
