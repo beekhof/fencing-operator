@@ -21,12 +21,25 @@ func (m *v1alpha1.FencingMechanism)CreateContainer(target string, secretsDir str
 }
 
 func (m *v1alpha1.FencingMechanism)openstackContainer(target string, secretsDir string) error, *v1.Container {
-	env = []v1.EnvVar{}
+	env = []v1.EnvVar{
+		{
+			Name:  "SECRET_FORMAT",
+			Value: "env",
+		},
+	}
 
 	for name, value := range m.Config {
 		env = append(env, v1.EnvVar{
 			Name:  name,
 			Value: value,
+			})
+	}
+
+	for name, value := range m.Secrets {
+		// Relies on an ENTRYPOINT that looks for SECRETPATH-field=/path/to/file and re-exports: field=$(cat /path/to/file)
+		env = append(env, v1.EnvVar{
+			Name:  fmt.Sprintf("SECRETPATH_%s", name),
+			Value: fmt.Sprintf("%s/%s", secretsDir, value),
 			})
 	}
 
@@ -41,8 +54,6 @@ func (m *v1alpha1.FencingMechanism)openstackContainer(target string, secretsDir 
 		}
 	}
 
-	// TODO: Support secrets.
-	
 	return &v1.Container{
 		{
 			GenerateName: "nova-",
@@ -55,9 +66,18 @@ func (m *v1alpha1.FencingMechanism)openstackContainer(target string, secretsDir 
 
 func (m *v1alpha1.FencingMechanism)baremetalContainer(target string, secretsDir string, echo bool) error, *v1.Container {
 	options := []string{}
+
+	env = []v1.EnvVar{
+		{
+			Name:  "SECRET_FORMAT",
+			Value: "args",
+		},
+	}
+
 	if echo {
 		options = append("/bin/echo")
 	}		
+
 	options = append(fmt.Sprintf("/sbin/fence_%v", m.Module))
 	options = append("-v")
 
@@ -65,7 +85,15 @@ func (m *v1alpha1.FencingMechanism)baremetalContainer(target string, secretsDir 
 		options = append(fmt.Sprintf("--%s", name))
 		options = append(value)
 	}
-
+	
+	for name, value := range m.Secrets {
+		// Relies on an ENTRYPOINT that looks for SECRETPATH-field=/path/to/file and add: --field=$(cat /path/to/file) to the command line
+		env = append(env, v1.EnvVar{
+			Name:  fmt.Sprintf("SECRETPATH_%s", name),
+			Value: fmt.Sprintf("%s/%s", secretsDir, value),
+			})
+	}
+	
 	for _, dc := range m.DynamicConfig {
 		options = append(fmt.Sprintf("--%s", dc.Field))
 		if value, ok := dc.Lookup(target); ok {
@@ -75,12 +103,6 @@ func (m *v1alpha1.FencingMechanism)baremetalContainer(target string, secretsDir 
 		}
 	}
 
-	// TODO: Support secrets.
-	//
-	// Get RHEL agents to support --password-file or come up with
-	// something more generic to hide anything, like a wrapper
-	// around fence_*
-	
 	return &v1.Container{
 		{
 			GenerateName: "baremetal-",
