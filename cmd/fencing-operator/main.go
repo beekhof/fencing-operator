@@ -15,8 +15,6 @@ import (
 )
 
 var (
-	namespace  string
-	name       string
 	mode       string
 
 	chaosLevel int
@@ -36,27 +34,27 @@ func init() {
 	flag.Parse()
 }
 
-func printVersion() {
+func Version() {
 	logrus.Infof("Go Version: %s", runtime.Version())
 	logrus.Infof("Go OS/Arch: %s/%s", runtime.GOOS, runtime.GOARCH)
 	logrus.Infof("operator-sdk Version: %v", sdkVersion.Version)
 }
 
 func main() {
-	namespace = os.Getenv(constants.EnvOperatorPodNamespace)
+	namespace := os.Getenv(constants.EnvOperatorPodNamespace)
 	if len(namespace) == 0 {
 		logrus.Fatalf("must set env (%s)", constants.EnvOperatorPodNamespace)
 	}
-	name = os.Getenv(constants.EnvOperatorPodName)
+	name := os.Getenv(constants.EnvOperatorPodName)
 	if len(name) == 0 {
 		logrus.Fatalf("must set env (%s)", constants.EnvOperatorPodName)
 	}
-	image = os.Getenv(constants.EnvOperatorPodImage)
+	image := os.Getenv(constants.EnvOperatorPodImage)
 	if len(image) == 0 {
 		logrus.Fatalf("must set env (%s)", constants.EnvOperatorPodImage)
 	}
 
-	printVersion()
+	Version()
  	if printVersion {
 		os.Exit(0)		
 	}

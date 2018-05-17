@@ -59,10 +59,10 @@ func NewConfigFromMap(m map[string]interface{}) *Config {
 	return &Config{config: m, mutex: sync.RWMutex{}}
 }
 
-func NewConfigFromString(text string) *Config {
+func NewConfigFromString(text string) (*Config, error) {
 	c := map[string]interface{}{}
 
-	if err = yaml.Unmarshal(string, &c); err != nil {
+	if err := yaml.Unmarshal([]byte(text), &c); err != nil {
 		return &Config{config: map[string]interface{}{}, mutex: sync.RWMutex{}}, err
 	}
 	return &Config{config: c, mutex: sync.RWMutex{}}, nil
@@ -109,6 +109,22 @@ func (c *Config) GetSliceOfStrings(key string) []string {
 	}
 	log.Debugf("Unable to get %v from config", key)
 	return nil
+}
+
+func (c *Config) GetMapOfStrings(key string) map[string]string {
+	c.mutex.RLock()
+	subMap := createNewMap(c.config)
+	//Can unlock the map for reading after we copy the map.
+	c.mutex.RUnlock()
+
+	newMap := map[string]string{}
+	for k, v := range subMap {
+		if s, ok := v.(string); ok {
+			newMap[k] = s
+		}
+	}
+	
+	return newMap
 }
 
 // GetInt - Retrieve the configuration value as a int.

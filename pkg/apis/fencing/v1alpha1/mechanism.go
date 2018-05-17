@@ -1,14 +1,15 @@
-package stub
+package v1alpha1
 
 import (
-	"github.com/beekhof/fencing-operator/pkg/apis/fencing/v1alpha1"
+	"os"
+	"fmt"
 	"github.com/beekhof/fencing-operator/pkg/constants"
 
 	"k8s.io/api/core/v1"
 //	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func (m *v1alpha1.FencingMechanism)CreateContainer(target string, secretsDir string) error, *v1.Container {
+func (m *FencingMechanism)CreateContainer(target string, secretsDir string) (error, *v1.Container) {
 	switch m.Driver {
 	case "openstack":
 		return m.openstackContainer(target, secretsDir)
@@ -20,8 +21,8 @@ func (m *v1alpha1.FencingMechanism)CreateContainer(target string, secretsDir str
 	return fmt.Errorf("Driver %s not supported", m.Driver), nil
 }
 
-func (m *v1alpha1.FencingMechanism)openstackContainer(target string, secretsDir string) error, *v1.Container {
-	env = []v1.EnvVar{
+func (m *FencingMechanism)openstackContainer(target string, secretsDir string) (error, *v1.Container) {
+	env := []v1.EnvVar{
 		{
 			Name:  "SECRET_FORMAT",
 			Value: "env",
@@ -54,20 +55,18 @@ func (m *v1alpha1.FencingMechanism)openstackContainer(target string, secretsDir 
 		}
 	}
 
-	return &v1.Container{
-		{
-			GenerateName: "nova-",
-			Image:   m.getImage(),
-			Command: []string{"/bin/nova", "delete", target},
-			Env: env,
-		},
+	return nil, &v1.Container{
+		Name: "nova",
+		Image:   m.getImage(),
+		Command: []string{"/bin/nova", "delete", target},
+		Env: env,
 	}
 }
 
-func (m *v1alpha1.FencingMechanism)baremetalContainer(target string, secretsDir string, echo bool) error, *v1.Container {
+func (m *FencingMechanism)baremetalContainer(target string, secretsDir string, echo bool) (error, *v1.Container) {
 	options := []string{}
 
-	env = []v1.EnvVar{
+	env := []v1.EnvVar{
 		{
 			Name:  "SECRET_FORMAT",
 			Value: "args",
@@ -75,15 +74,15 @@ func (m *v1alpha1.FencingMechanism)baremetalContainer(target string, secretsDir 
 	}
 
 	if echo {
-		options = append("/bin/echo")
+		options = append(options, "/bin/echo")
 	}		
 
-	options = append(fmt.Sprintf("/sbin/fence_%v", m.Module))
-	options = append("-v")
+	options = append(options, fmt.Sprintf("/sbin/fence_%v", m.Module))
+	options = append(options, "-v")
 
 	for name, value := range m.Config {
-		options = append(fmt.Sprintf("--%s", name))
-		options = append(value)
+		options = append(options, fmt.Sprintf("--%s", name))
+		options = append(options, value)
 	}
 	
 	for name, value := range m.Secrets {
@@ -95,24 +94,23 @@ func (m *v1alpha1.FencingMechanism)baremetalContainer(target string, secretsDir 
 	}
 	
 	for _, dc := range m.DynamicConfig {
-		options = append(fmt.Sprintf("--%s", dc.Field))
+		options = append(options, fmt.Sprintf("--%s", dc.Field))
 		if value, ok := dc.Lookup(target); ok {
-			options = append(value)
+			options = append(options, value)
 		} else {
 			return fmt.Errorf("No value of '%s' found for '%s'", dc.Field, target), nil
 		}
 	}
 
-	return &v1.Container{
-		{
-			GenerateName: "baremetal-",
-			Image:   m.getImage(),
-			Command: options,
-		},
+	return nil, &v1.Container{
+		Name: "baremetal",
+		Image:   m.getImage(),
+		Command: options,
+		Env: env,
 	}
 }
 
-func (m *v1alpha1.FencingMechanism)getImage() string {
+func (m *FencingMechanism)getImage() string {
 	if len(m.Image) > 0 {
 		return m.Image
 	}
@@ -127,8 +125,8 @@ func (m *v1alpha1.FencingMechanism)getImage() string {
 	return os.Getenv(constants.EnvOperatorPodImage)
 }
 
-func (dc *FencingDynamicConfig)Lookup(key string) bool, string {
-	if val, ok := dict[key]; ok {
+func (dc *FencingDynamicConfig)Lookup(key string) (string, bool) {
+	if val, ok := dc.Values[key]; ok {
 		return val, true
 	} else if len(dc.Default) > 0 {
 		return dc.Default, true

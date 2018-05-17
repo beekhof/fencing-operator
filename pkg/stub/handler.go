@@ -2,6 +2,7 @@ package stub
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/beekhof/fencing-operator/pkg/apis/fencing/v1alpha1"
 
@@ -13,7 +14,6 @@ import (
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -56,7 +56,7 @@ func (h *Handler) Handle(ctx types.Context, event types.Event) error {
 func (h *Handler) HandleNode(ctx types.Context, node *v1.Node, deleted bool) error {
 	if deleted {
 		logrus.Errorf("Node deleted : %v ", node)
-		h.CancelFencingRequest(node, nil)
+		h.CancelFencingRequests(node, "")
 		
 	} else  {
 		for _, condition := range node.Status.Conditions {
@@ -89,7 +89,7 @@ func (h *Handler) HandleEvent(ctx types.Context, event *v1.Event, deleted bool) 
 		logrus.Errorf("Failed to get node '%s': %s", event.Source.Host, err)
 		return err
 	}
-	h.CreateFencingRequest(node, event.Reeason)
+	h.CreateFencingRequest(node, event.Reason)
 	return nil
 }
 
@@ -179,44 +179,44 @@ func (h *Handler) isNodeDirty(node *v1.Node, condition v1.NodeCondition) bool {
 	return dirty
 }
 
-func (h *Handler) listFencingRequests(node *v1.Node, name string) (error, []v1.FencingRequest) {
-	requestList := &v1alpha.FencingRequestList{
+func (h *Handler) listFencingRequests(node *v1.Node, name string) (error, []v1alpha1.FencingRequest) {
+	requestList := &v1alpha1.FencingRequestList{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "FencingRequest",
 			APIVersion: "v1alpha1",
 		},
 	}
 
-	var sel
+	var sel string
 	if len(name) > 0 {
 		sel = fmt.Sprintf("spec.target=%s,name=%s", node.Name, name)
 	} else {
 		sel = fmt.Sprintf("spec.target=%s", node.Name)
 	}
-	sel := fmt.Sprintf("spec.target=%s", node.Name)
 	opt := &metav1.ListOptions{FieldSelector: sel}
-	err := query.List("--all-namespaces", pods, query.WithListOptions(opt))
+	err := query.List("--all-namespaces", requestList, query.WithListOptions(opt))
 	if err != nil {
 		logrus.Errorf("Failed to get fencing request list: %v", err)
 	}
 	return err, requestList.Items
 }
 
-func (h *Handler) DeleteFencingRequest(node *v1.Node, name string) error {
+func (h *Handler) CancelFencingRequests(node *v1.Node, name string) error {
 	// Delete a specific request or all for the supplied node
-	_, requests := listFencingRequests(node, name) 
+	_, requests := h.listFencingRequests(node, name) 
 	for _, request := range requests {
-		err := action.Delete(request)
+		err := action.Delete(&request)
 		if err != nil {
 			logrus.Errorf("Failed to delete fencing request %v: %v", request.UID, err)
 		}
 	}
+	return nil
 }
 
 func (h *Handler) CreateFencingRequest(node *v1.Node, cause string) error {
 
 	// Look for any existing FencingRequests, only create a new one if not found
-	_, requests := listFencingRequests(node, name) 
+	_, requests := h.listFencingRequests(node, "") 
 	for _, request := range requests {
 		if request.Status.Complete {
 			logrus.Infof("Node %s is already scheduled for fencing by %v", node.UID, request.Name)

@@ -3,9 +3,6 @@ package v1alpha1
 // https://github.com/kubernetes/apimachinery/blob/master/pkg/apis/meta/v1/types.go
 
 import (
-	"date"
-	
-	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -43,24 +40,24 @@ type FencingRequestSpec struct {
 	//
 	// A _failed_ node returning to a healthy state cancels any
 	// existing scheduled fencing actions
-	ValidAfter date.Time `json:"validAfter,omitempty"`
+	ValidAfter int64 `json:"validAfter,omitempty"`
 
 }
 
 type FencingRequestStatus struct {
 	Complete  bool  `json:"complete"`
-	Result    int  `json:"result"`
-	Config    *string `json:"config"`
-	ActiveMethod *string `json:"activeMethod"`
+	Result    string  `json:"result"`
+	Config    *string `json:"config,omitempty"`
+	ActiveMethod *string `json:"activeMethod,omitempty"`
 	Updates []FencingRequestStatusUpdate `json:"updates,omitempty"`
 }
 
 type FencingRequestStatusUpdate struct {
-	Timestamp date.Time `json:"timestamp"`
+	Timestamp string `json:"timestamp"`
 	Method    string `json:"method,omitempty"`
 	Message   string `json:"message"`
 	Output    string `json:"output"`
-	Error     error  `json:"error,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -83,6 +80,8 @@ type FencingSet struct {
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 type FencingConfig struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata"`
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 	Methods    []FencingMethod `json:"methods"`
 }
@@ -91,7 +90,7 @@ type FencingMethod struct {
 	Name string `json:"name"`
 	RequireAfterSeconds *int32 `json:"requireAfterSeconds,omitempty"`
 	Retries              int32 `json:"retries"`
-	Mechansims []FencingMechanism `json:"mechanisms"`
+	Mechanisms []FencingMechanism `json:"mechanisms"`
 }
 
 type FencingMechanism struct {
