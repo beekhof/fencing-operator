@@ -89,12 +89,12 @@ func createRecorder(kubecli kubernetes.Interface, name, namespace string) record
 	return eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: name})
 }
 
-func SingletonWith(id string, name string, namespace string, startedLeadingFunc func(stop <-chan struct{})) {
+func SingletonWith(id string, name string, namespace string, role string, startedLeadingFunc func(stop <-chan struct{})) {
 	kubecli, _ := mustNewKubeClientAndConfig()
 
 	rl, err := resourcelock.New(resourcelock.EndpointsResourceLock,
 		namespace,
-		"fencing-operator",
+		role,
 		kubecli.CoreV1(),
 		resourcelock.ResourceLockConfig{
 			Identity:      id,
