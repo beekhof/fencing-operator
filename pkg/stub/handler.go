@@ -25,6 +25,7 @@ import (
 var (
 	// TODO read supported source from node problem detector config - this issue is still WIP
 	supportedNodeProblemSources = sets.NewString("abrt-notification", "abrt-adaptor", "docker-monitor", "kernel-monitor", "kernel")
+	nodeFailureHandled = map[string]bool{}
 )
 
 
@@ -57,23 +58,41 @@ func (h *Handler) HandleNode(ctx types.Context, node *v1.Node, deleted bool) err
 	if deleted {
 		logrus.Errorf("Node deleted : %v ", node)
 		CancelFencingRequests(node, "")
-		
-	} else  {
-		for _, condition := range node.Status.Conditions {
-			if isNodeDirty(node, condition) {
+		return nil
+	}
+
+	if _, ok := nodeFailureHandled[node.Name]; !ok {
+		nodeFailureHandled[node.Name] = false
+	}
+
+	for _, condition := range node.Status.Conditions {
+		if v1.NodeReady == condition.Type && v1.ConditionUnknown == condition.Status {
+			// TODO: Add new (unique) 'reasons' to the existing crd?
+			
+			//logrus.Infof("Processing node %s loss (%v): %v", node.Name, nodeFailureHandled[node.Name], condition)
+			if !nodeFailureHandled[node.Name] && isNodeDirty(node, condition) {
 				CreateFencingRequest(node, fmt.Sprintf("%v", condition))
-				return nil // No need to continue processing
+			} else {
+				nodeFailureHandled[node.Name] = true
 			}
+
+		} else if nodeFailureHandled[node.Name] && v1.NodeReady == condition.Type {
+			logrus.Infof("Node %s returned: %v", node.Name, condition)
+			CancelFencingRequests(node, "")
 		}
+
+		// time="2018-05-22T05:12:59Z" level=warning msg="Node kube-1: {Ready True 2018-05-22 05:12:56 +0000 UTC 2018-05-22 03:53:56 +0000 UTC KubeletReady kubelet is posting ready status}"
 	}
 	return nil
 }
 
 func (h *Handler) HandleEvent(ctx types.Context, event *v1.Event, deleted bool) error {
 	if event.Type != v1.EventTypeWarning || !supportedNodeProblemSources.Has(string(event.Source.Component)) {
+		//logrus.Infof("Processing event: %v ", event)
 		return nil
 	}
 
+	logrus.Warningf("Processing event: %v ", event)
 	node := &v1.Node{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Node",
@@ -161,20 +180,19 @@ func isPodDirty(pod v1.Pod) bool {
 }
 
 func isNodeDirty(node *v1.Node, condition v1.NodeCondition) bool {
+	// https://kubernetes.io/docs/concepts/architecture/nodes/#condition
 	dirty := false
-	if v1.NodeReady == condition.Type && v1.ConditionUnknown == condition.Status {
-		// https://kubernetes.io/docs/concepts/architecture/nodes/#condition
-		_, pods := listPods(node)
-		for _, pod := range pods {
-			if isPodDirty(pod) {
-				dirty = true
-			}
+	_, pods := listPods(node)
+	for _, pod := range pods {
+		if isPodDirty(pod) {
+			dirty = true
 		}
 	}
 	if dirty {
 		logrus.Warningf("Node %s is lost with attached persistent volumes", node.Name)
 	} else {
 		logrus.Warningf("Node %s is lost", node.Name)
+		dirty = true // TODO: For debugging only
 	}
 	return dirty
 }
@@ -183,7 +201,7 @@ func listFencingRequests(node *v1.Node, name string) (error, []v1alpha1.FencingR
 	requestList := &v1alpha1.FencingRequestList{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "FencingRequest",
-			APIVersion: "v1alpha1",
+			APIVersion: "fencing.clusterlabs.org/v1alpha1",
 		},
 	}
 
@@ -195,14 +213,15 @@ func listFencingRequests(node *v1.Node, name string) (error, []v1alpha1.FencingR
 	}
 	opt := &metav1.ListOptions{FieldSelector: sel}
 	err := query.List("--all-namespaces", requestList, query.WithListOptions(opt))
-	if err != nil {
-		logrus.Errorf("Failed to get fencing request list: %v", err)
+	if err != nil && len(name) > 0 {
+		logrus.Errorf("Failed to get fencing request list for %s: %v", name, err)
 	}
 	return err, requestList.Items
 }
 
 func CancelFencingRequests(node *v1.Node, name string) error {
 	// Delete a specific request or all for the supplied node
+	nodeFailureHandled[node.Name] = false
 	_, requests := listFencingRequests(node, name) 
 	for _, request := range requests {
 		err := action.Delete(&request)
@@ -245,6 +264,7 @@ func CreateFencingRequest(node *v1.Node, cause string) error {
 		logrus.Errorf("Failed to create fencing request for node %s: %v", node.Name, err)
 	} else {
 		logrus.Infof("Created fencing request for node %s: %s", node.Name, cause)
+		nodeFailureHandled[node.Name] = true
 	}
 	return err
 }
@@ -269,7 +289,8 @@ func newFencingRequest(node *v1.Node, cause string) *v1alpha1.FencingRequest {
 	return &v1alpha1.FencingRequest{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "FencingRequest",
-			APIVersion: "v1alpha1",
+			//APIGroup:   v1alpha1.SchemeGroupVersion.Group,
+			APIVersion: "fencing.clusterlabs.org/v1alpha1", //v1alpha1.SchemeGroupVersion.Version,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: name,

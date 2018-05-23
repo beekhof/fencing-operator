@@ -11,6 +11,9 @@ import (
 const (
 	version   = "v1alpha1"
 	groupName = "fencing.clusterlabs.org"
+        FencingRequestResourceKind   = "FencingRequest"
+        FencingRequestResourcePlural = "fencingrequests"
+        FencingRequestResourceShort  = "fr"
 )
 
 var (
@@ -18,6 +21,8 @@ var (
 	AddToScheme   = SchemeBuilder.AddToScheme
 	// SchemeGroupVersion is the group version used to register these objects.
 	SchemeGroupVersion = schema.GroupVersion{Group: groupName, Version: version}
+	FencingRequestCRDName = FencingRequestResourcePlural + "." + groupName
+
 )
 
 func init() {

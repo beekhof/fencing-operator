@@ -24,6 +24,7 @@ run:	clean clean-ns ns
 	$(KUBECTL) create -f $(OPERATOR)
 	echo -n "Waiting..."
 	while [ "x$$( $(KUBECTL) get po | grep fencing-operator-.*Running)" = x ]; do sleep 5; /bin/echo -n .; done
+	sleep 5 # Give time for one of the pods to become the leader
 	echo " done"
 
 logs:
