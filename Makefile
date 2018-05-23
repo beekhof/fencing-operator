@@ -1,5 +1,8 @@
 NS=test
 KUBECTL=kubectl -n $(NS)
+export GREP=grep --color=never
+OPERATOR=example/deployment-operator.yaml
+MASTER=$$( for POD in $$( $(KUBECTL) get po | $(GREP) fencing-operator.*Running | awk '{print $$1}' ); do $(KUBECTL) logs po/$$POD ; done | sort | /bin/grep "became leader" | sed s/.*LeaderElection\'// | awk '{print $$1}')
 
 all: build
 
@@ -17,20 +20,26 @@ ns:
 	-example/rbac/create_role.sh  --namespace $(NS) --role-name $(NS)-operator --role-binding-name $(NS)-operator
 
 
-run:	clean ns 
-	$(KUBECTL) create -f example/operator.yaml
-	while [ "x$$($(KUBECTL) get po | grep fencing-operator.*Running)" = x ]; do sleep 5; /bin/echo -n .; done
-	echo "."
-	$(KUBECTL) logs -f fencing-operator
+run:	clean clean-ns ns 
+	$(KUBECTL) create -f $(OPERATOR)
+	echo -n "Waiting..."
+	while [ "x$$( $(KUBECTL) get po | grep fencing-operator-.*Running)" = x ]; do sleep 5; /bin/echo -n .; done
+	echo " done"
 
 logs:
-	$(KUBECTL) logs -f fencing-operator
+	$(KUBECTL) describe pods | grep -e ^Name: -e ^Node: | sed 's/Node:/     /'
+	echo $(KUBECTL) logs -f $(MASTER) 
+	$(KUBECTL) logs -f $(MASTER) 
 
 clean:
-	-$(KUBECTL) delete -f example/operator.yaml
+	-$(KUBECTL) delete -f $(OPERATOR)
+	echo -n "Waiting..."
 	while [ "x$$($(KUBECTL) get po 2>/dev/null)" != "x" ]; do sleep 5; /bin/echo -n .; done
-	echo "."
+	echo " done"
+
+clean-ns:
 	-kubectl delete ns/$(NS) clusterrole/$(NS)-operator clusterrolebinding/$(NS)-operator
+	echo -n "Waiting..."
 	while [ "x$$(kubectl get ns $(NS) 2>/dev/null)" != "x" ]; do sleep 5; /bin/echo -n .; done
-	echo "."
+	echo " done"
 
