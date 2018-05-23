@@ -1,0 +1,28 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: fencing-operator
+spec:
+  # There must be at least two, k8s wont start new copies if the worker we're on is the one that fails
+  replicas: 2
+  template:
+    metadata:
+      labels:
+        name: fencing-operator
+    spec:
+      containers:
+      - name: fencing-operator
+        image: quay.io/beekhof/fencing-operator:latest
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: POD_IMAGE
+          value: quay.io/beekhof/fencing-operator:latest
