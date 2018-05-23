@@ -26,7 +26,7 @@ var (
 
 func init() {
 	//flag.StringVar(&debug.DebugFilePath, "debug-logfile-path", "", "only for a self hosted cluster, the path where the debug logfile will be written, recommended to be under: /var/tmp/etcd-operator/debug/ to avoid any issue with lack of write permissions")
-	flag.StringVar(&mode, "mode", "executioner", "Possible values: node watcher, executioner, [all]")
+	flag.StringVar(&mode, "mode", "watcher", "Possible values: node watcher, executioner, [all]")
 	// chaos level will be removed once we have a formal tool to inject failures.
 	flag.IntVar(&chaosLevel, "chaos-level", -1, "DO NOT USE IN PRODUCTION - level of chaos injected into the etcd clusters created by the operator.")
 	flag.BoolVar(&printVersion, "version", false, "Show version and quit")
@@ -61,15 +61,15 @@ func main() {
 
 	switch mode {
 	case "watcher":
-		sdk.Watch("k8s.io.api.core/v1", "Node", "default", 5)
-		sdk.Watch("k8s.io.api.core/v1", "Event", "default", 5)
+		sdk.Watch("v1", "Node", "default", 5)
+		sdk.Watch("v1", "Event", "default", 5)
 	case "executioner":
-		sdk.Watch("k8s.io.api.core/v1", "ConfigMap", "default", 5)
+		sdk.Watch("v1", "ConfigMap", "default", 5)
 		sdk.Watch("fencing.clusterlabs.org/v1alpha1", "FencingRequest", "default", 5)
 	case "all":
-		sdk.Watch("k8s.io.api.core/v1", "Node", "default", 5)
-		sdk.Watch("k8s.io.api.core/v1", "Event", "default", 5)
-		sdk.Watch("k8s.io.api.core/v1", "ConfigMap", "default", 5)
+		sdk.Watch("v1", "Node", "default", 5)
+		sdk.Watch("v1", "Event", "default", 5)
+		sdk.Watch("v1", "ConfigMap", "default", 5)
 		sdk.Watch("fencing.clusterlabs.org/v1alpha1", "FencingRequest", "default", 5)
 	}
 	sdk.Handle(stub.NewHandler())
