@@ -20,7 +20,8 @@ ns:
 	-example/rbac/create_role.sh  --namespace $(NS) --role-name $(NS)-operator --role-binding-name $(NS)-operator
 
 
-run:	clean clean-ns ns 
+run:	clean ns 
+	$(KUBECTL) create -f example/config.yaml
 	$(KUBECTL) create -f $(OPERATOR)
 	echo -n "Waiting..."
 	while [ "x$$( $(KUBECTL) get po | grep fencing-operator-.*Running)" = x ]; do sleep 5; /bin/echo -n .; done
@@ -32,8 +33,11 @@ logs:
 	echo $(KUBECTL) logs -f $(MASTER) 
 	$(KUBECTL) logs -f $(MASTER) 
 
-clean:
+clean: clean-op clean-ns 
+
+clean-op:
 	-$(KUBECTL) delete -f $(OPERATOR)
+	-$(KUBECTL) delete -f example/config.yaml
 	echo -n "Waiting..."
 	while [ "x$$($(KUBECTL) get po 2>/dev/null)" != "x" ]; do sleep 5; /bin/echo -n .; done
 	echo " done"
