@@ -31,6 +31,9 @@ var (
 
 func (h *Handler) HandleConfigMap(ctx types.Context, configmap *v1.ConfigMap, deleted bool) error {
 	// Maintain a list of FencingConfig objects for HandleFencingRequest() to use
+	if _, ok := configmap.Data["fencing-config"]; !ok {
+		return nil
+	}
 
 	if deleted {
 		logrus.Infof("Deleting %v", configmap.Name)
@@ -38,17 +41,25 @@ func (h *Handler) HandleConfigMap(ctx types.Context, configmap *v1.ConfigMap, de
 		return nil
 	}
 
-	if fencingConfigs[configmap.Name] != nil {
-		logrus.Infof("Updating %v", configmap.Name)
+	if cm, ok := fencingConfigs[configmap.Name]; ok {
+		if cm.ResourceVersion == configmap.ResourceVersion && cm.Generation == configmap.Generation {
+			logrus.Infof("No change to %v", configmap.Name)
+			return nil
+		} else {
+			logrus.Infof("Updating %v", configmap.Name)
+		}
+
+	} else {
+		logrus.Infof("Creating %v", configmap.Name)
 	}
 
 	methods := []v1alpha1.FencingMethod{}
 	cfg, err :=  config.NewConfigFromString(configmap.Data["fencing-config"])
 	if err != nil {
+		logrus.Errorf("Bad config %v: %v", configmap.Name, err)
 		return err
 	}
 
-	logrus.Infof("Creating %v", configmap.Name)
 	for _, subcfg := range cfg.GetSubConfigArray("methods") {
 		err, m := newFencingMethodFromConfig(subcfg)
 		if err != nil {
@@ -58,11 +69,30 @@ func (h *Handler) HandleConfigMap(ctx types.Context, configmap *v1.ConfigMap, de
 	}
 
 	fencingConfigs[configmap.Name] = &v1alpha1.FencingConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: configmap.Name,
+			ResourceVersion: configmap.ResourceVersion,
+			Generation: configmap.Generation,
+		},
 		NodeSelector: cfg.GetMapOfStrings("nodeSelector"),
 		Methods: methods,
 	}
 	logrus.Infof("Created %v: %v", configmap.Name, fencingConfigs[configmap.Name])
 	return nil
+}
+
+func (h *Handler) HandleFencingRequestError(req *v1alpha1.FencingRequest, method *v1alpha1.FencingMethod, err error, last bool) bool {
+	if err != nil && last {
+		logrus.Errorf("Failed to schedule last configured fencing job %v for %s (%v): %v", method.Name, req.Spec.Target, req.UID, err)
+		req.SetFinalResult(v1alpha1.RequestFailed, err)
+		return true
+
+	} else if err != nil {
+		logrus.Errorf("Failed to schedule fencing job %v for %s (%v): %v", method.Name, req.Spec.Target, req.UID, err)
+		req.AddResult(method.Name, v1alpha1.RequestFailed, err)
+		return true
+	}
+	return false
 }
 
 func (h *Handler) HandleFencingRequest(ctx types.Context, req *v1alpha1.FencingRequest, deleted bool) error {
@@ -75,6 +105,10 @@ func (h *Handler) HandleFencingRequest(ctx types.Context, req *v1alpha1.FencingR
 		return nil
 	}
 
+	if req.Status.Complete {
+		return nil
+	}
+		
 	err, cfg := chooseFencingConfig(req)
 	if err != nil {
 		logrus.Errorf("No valid fencing configurations for %v (%v)", req.Spec.Target, req.Name)
@@ -82,19 +116,20 @@ func (h *Handler) HandleFencingRequest(ctx types.Context, req *v1alpha1.FencingR
 		return err
 	}
 
-	err, method := chooseFencingMethod(req, cfg)
-	if err != nil {
+	err, method, last := chooseFencingMethod(req, cfg)
+	if h.HandleFencingRequestError(req, method, err, last) {
 		logrus.Errorf("All configured fencing methods have failed for %v (%v)", req.Spec.Target, req.Name)
-		req.SetFinalResult(v1alpha1.RequestFailed, err)
 		return err
-	} else if isFencingMethodActive(req, *method) {
+	}
+
+	if isFencingMethodActive(req, *method) {
 		logrus.Infof("Waiting until %v/%v completes for %v", cfg.Name, method.Name, req.Name)
 		return nil
 	}
 
 	err, job := createFencingJob(req, cfg, *method)
-	if err != nil {
-		req.AddResult(method.Name, v1alpha1.RequestFailed, err)
+	if h.HandleFencingRequestError(req, method, err, last) {
+		logrus.Errorf("All configured fencing methods have failed for %v (%v)", req.Spec.Target, req.Name)
 		return err
 	}
 
@@ -103,21 +138,24 @@ func (h *Handler) HandleFencingRequest(ctx types.Context, req *v1alpha1.FencingR
 		Factor:   1.2,
 		Steps:    5,
 	}
-
+	
+	logrus.Infof("Creating: %v", job)
 	err = wait.ExponentialBackoff(backoff, func() (bool, error) {
 		if err := action.Create(job); err != nil && !errors.IsAlreadyExists(err) {
 			// Retry it as errors writing to the API server are common
+			logrus.Infof("Creation failed: %v", err)
 			return false, err
 		}
+		logrus.Infof("Creation passed: %v", job, err)
 		return true, nil
 	})
-	
-	if err != nil {
-		logrus.Errorf("Failed to schedule fencing job %v for %s (%v): %v", method.Name, req.Spec.Target, req.UID, err)
-	} else {
-		logrus.Infof("Scheduled fencing job %v for request %s (%v)", method.Name, req.Spec.Target, req.UID)
+
+	if h.HandleFencingRequestError(req, method, err, last) {
+		return err
 	}
-	return err
+
+	logrus.Infof("Scheduled fencing job %v for request %s (%v)", method.Name, req.Spec.Target, req.UID)
+	return nil
 }
 
 func nodeInList(name string, nodes []v1.Node) bool {
@@ -176,23 +214,25 @@ func isFencingMethodActive(req *v1alpha1.FencingRequest, method v1alpha1.Fencing
 	return false
 }
 
-func chooseFencingMethod(req *v1alpha1.FencingRequest, cfg *v1alpha1.FencingConfig) (error, *v1alpha1.FencingMethod) {
+func chooseFencingMethod(req *v1alpha1.FencingRequest, cfg *v1alpha1.FencingConfig) (error, *v1alpha1.FencingMethod, bool) {
 	// TODO: Verify that yaml ordering of methods is preserved
 	next := false
-	for _, method := range cfg.Methods {
+	max := len(cfg.Methods)
+	for lpc, method := range cfg.Methods {
+		last := (lpc + 1) == max
 		if req.Status.ActiveMethod == nil {
-			return nil, &method
+			return nil, &method, last
 		} else if *req.Status.ActiveMethod == method.Name && isFencingMethodActive(req, method) {
-			return nil, &method
+			return nil, &method, last
 			
 		} else if *req.Status.ActiveMethod == method.Name {
 			next = true
 		} else if next {
-			return nil, &method
+			return nil, &method, last
 		}			
 	}
 
-	return fmt.Errorf("No remaining methods available"), nil
+	return fmt.Errorf("No remaining methods available"), nil, true
 }
 
 func createFencingJob(req *v1alpha1.FencingRequest, cfg *v1alpha1.FencingConfig, method v1alpha1.FencingMethod) (error, *v1batch.Job) {
@@ -243,7 +283,7 @@ func createFencingJob(req *v1alpha1.FencingRequest, cfg *v1alpha1.FencingConfig,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: fmt.Sprintf("%v-job-", req.Name),
-			Namespace:    "default",
+			Namespace: req.Namespace,    
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(req, schema.GroupVersionKind{
 					Group:   v1alpha1.SchemeGroupVersion.Group,
@@ -304,7 +344,8 @@ func ListJobs(req *v1alpha1.FencingRequest, method string) (error, []v1batch.Job
 		IncludeUninitialized: false,
 	})
 
-	err := query.List("--all-namespaces", jobs, listOptions)
+	//namespace := "--all-namespaces"
+	err := query.List(req.Namespace, jobs, listOptions)
 	if err != nil {
 		logrus.Errorf("failed to get job list: %v", err)
 	}
@@ -323,6 +364,7 @@ func newFencingMethodFromConfig(cfg *config.Config) (error, *v1alpha1.FencingMet
 		mechanisms = append(mechanisms, *m)
 	}
 
+	logrus.Infof("Creating internal representation for %v", cfg.GetString("name"))
 	return nil, &v1alpha1.FencingMethod{
 		Name:       cfg.GetString("name"),
 		Retries:    1,
