@@ -1,10 +1,12 @@
 package stub
 
 import (
+	"os"
 	"fmt"
 	"time"
 
 	"github.com/beekhof/fencing-operator/pkg/apis/fencing/v1alpha1"
+	"github.com/beekhof/fencing-operator/pkg/constants"
 
 	"github.com/operator-framework/operator-sdk/pkg/sdk/action"
 	"github.com/operator-framework/operator-sdk/pkg/sdk/query"
@@ -50,13 +52,16 @@ func (h *Handler) Handle(ctx types.Context, event types.Event) error {
 
 	case *v1alpha1.FencingRequest:
 		h.HandleFencingRequest(ctx, o, event.Deleted)
+	default:
+		logrus.Errorf("Unhandled event: %v ", o)		
 	}
+	
 	return nil
 }
 
 func (h *Handler) HandleNode(ctx types.Context, node *v1.Node, deleted bool) error {
 	if deleted {
-		logrus.Errorf("Node deleted : %v ", node)
+		logrus.Errorf("Node deleted: %v ", node)
 		CancelFencingRequests(node, "")
 		return nil
 	}
@@ -294,7 +299,7 @@ func newFencingRequest(node *v1.Node, cause string) *v1alpha1.FencingRequest {
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: name,
-			Namespace:    "default",
+			Namespace:    os.Getenv(constants.EnvOperatorPodNamespace),
 			Labels: labels,
 /* TODO: Link to the operator itself
 			OwnerReferences: []metav1.OwnerReference{
