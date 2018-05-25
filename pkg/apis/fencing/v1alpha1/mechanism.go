@@ -12,16 +12,18 @@ import (
 func (m *FencingMechanism)CreateContainer(target string, secretsDir string) (error, *v1.Container) {
 	switch m.Driver {
 	case "openstack":
-		return m.openstackContainer(target, secretsDir)
+		return m.genericContainer(target, secretsDir, []string{"/bin/nova", "delete", target})
 	case "baremetal":
 		return m.baremetalContainer(target, secretsDir, false)
 	case "echo":
 		return m.baremetalContainer(target, secretsDir, true)
+	case "generic":
+		return m.genericContainer(target, secretsDir, []string{})
 	}
 	return fmt.Errorf("Driver %s not supported", m.Driver), nil
 }
 
-func (m *FencingMechanism)openstackContainer(target string, secretsDir string) (error, *v1.Container) {
+func (m *FencingMechanism)genericContainer(target string, secretsDir string, command []string) (error, *v1.Container) {
 	env := []v1.EnvVar{
 		{
 			Name:  "SECRET_FORMAT",
@@ -37,7 +39,7 @@ func (m *FencingMechanism)openstackContainer(target string, secretsDir string) (
 	}
 
 	for name, value := range m.Secrets {
-		// Relies on an ENTRYPOINT that looks for SECRETPATH-field=/path/to/file and re-exports: field=$(cat /path/to/file)
+		// Relies on an ENTRYPOINT or CMD that looks for SECRETPATH-field=/path/to/file and re-exports: field=$(cat /path/to/file)
 		env = append(env, v1.EnvVar{
 			Name:  fmt.Sprintf("SECRETPATH_%s", name),
 			Value: fmt.Sprintf("%s/%s", secretsDir, value),
@@ -55,12 +57,15 @@ func (m *FencingMechanism)openstackContainer(target string, secretsDir string) (
 		}
 	}
 
-	return nil, &v1.Container{
-		Name: "nova",
+	c := &v1.Container{
+		Name: "generic",
 		Image:   m.getImage(),
-		Command: []string{"/bin/nova", "delete", target},
 		Env: env,
 	}
+	if len(command) > 0 {
+		c.Command = command
+	}
+	return nil, c
 }
 
 func (m *FencingMechanism)baremetalContainer(target string, secretsDir string, echo bool) (error, *v1.Container) {
