@@ -78,22 +78,23 @@ func main() {
 
 
 func run(stop <-chan struct{}) {
+	resyncInterval := 0 // Non-zero results in duplicate update notifications, even if nothing changed
 	if createCRD {
 		k8sutil.RegisterCRD()
 	}
 
 	switch mode {
 	case "watcher":
-		sdk.Watch("v1", "Node", "default", 5)
-		sdk.Watch("v1", "Event", "default", 5)
+		sdk.Watch("v1", "Node", "default", resyncInterval)
+		sdk.Watch("v1", "Event", "default", resyncInterval)
 	case "executioner":
-		sdk.Watch("v1", "ConfigMap", namespace, 5)
-		sdk.Watch("fencing.clusterlabs.org/v1alpha1", "FencingRequest", namespace, 5)
+		sdk.Watch("v1", "ConfigMap", namespace, resyncInterval)
+		sdk.Watch("fencing.clusterlabs.org/v1alpha1", "FencingRequest", namespace, resyncInterval)
 	case "all":
-		sdk.Watch("v1", "Node", "default", 5)
-		sdk.Watch("v1", "Event", "default", 5)
-		sdk.Watch("v1", "ConfigMap", namespace, 5)
-		sdk.Watch("fencing.clusterlabs.org/v1alpha1", "FencingRequest", namespace, 5)
+		sdk.Watch("v1", "Node", "default", resyncInterval)
+		sdk.Watch("v1", "Event", "default", resyncInterval)
+		sdk.Watch("v1", "ConfigMap", namespace, resyncInterval)
+		sdk.Watch("fencing.clusterlabs.org/v1alpha1", "FencingRequest", namespace, resyncInterval)
 	}
 	sdk.Handle(stub.NewHandler())
 	sdk.Run(context.TODO())
