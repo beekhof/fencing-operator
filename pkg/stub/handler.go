@@ -27,7 +27,6 @@ import (
 var (
 	// TODO read supported source from node problem detector config - this issue is still WIP
 	supportedNodeProblemSources = sets.NewString("abrt-notification", "abrt-adaptor", "docker-monitor", "kernel-monitor", "kernel")
-	nodeFailureHandled = map[string]bool{}
 )
 
 
@@ -61,29 +60,25 @@ func (h *Handler) Handle(ctx types.Context, event types.Event) error {
 
 func (h *Handler) HandleNode(ctx types.Context, node *v1.Node, deleted bool) error {
 	if deleted {
-		logrus.Errorf("Node deleted: %v ", node)
+		logrus.Errorf("Node deleted: %v ", node.Name)
 		CancelFencingRequests(node, "")
 		return nil
 	}
 
-	if _, ok := nodeFailureHandled[node.Name]; !ok {
-		nodeFailureHandled[node.Name] = false
-	}
-
+//	logrus.Infof("Node updated: %v ", node.Name)
 	for _, condition := range node.Status.Conditions {
 		if v1.NodeReady == condition.Type && v1.ConditionUnknown == condition.Status {
 			// TODO: Add new (unique) 'reasons' to the existing crd?
 			
 			//logrus.Infof("Processing node %s loss (%v): %v", node.Name, nodeFailureHandled[node.Name], condition)
-			if !nodeFailureHandled[node.Name] && isNodeDirty(node, condition) {
+			if isNodeDirty(node, condition) {
 				CreateFencingRequest(node, fmt.Sprintf("%v", condition))
-			} else {
-				nodeFailureHandled[node.Name] = true
 			}
 
-		} else if nodeFailureHandled[node.Name] && v1.NodeReady == condition.Type {
-			logrus.Infof("Node %s returned: %v", node.Name, condition)
-			CancelFencingRequests(node, "")
+		} else if v1.NodeReady == condition.Type {
+			if CancelFencingRequests(node, "") {
+				logrus.Infof("Node %s returned: %v", node.Name, condition)
+			}
 		}
 
 		// time="2018-05-22T05:12:59Z" level=warning msg="Node kube-1: {Ready True 2018-05-22 05:12:56 +0000 UTC 2018-05-22 03:53:56 +0000 UTC KubeletReady kubelet is posting ready status}"
@@ -224,17 +219,18 @@ func listFencingRequests(node *v1.Node, name string) (error, []v1alpha1.FencingR
 	return err, requestList.Items
 }
 
-func CancelFencingRequests(node *v1.Node, name string) error {
+func CancelFencingRequests(node *v1.Node, name string) bool {
 	// Delete a specific request or all for the supplied node
-	nodeFailureHandled[node.Name] = false
+	any := false
 	_, requests := listFencingRequests(node, name) 
 	for _, request := range requests {
+		any = true
 		err := action.Delete(&request)
 		if err != nil {
 			logrus.Errorf("Failed to delete fencing request %v: %v", request.UID, err)
 		}
 	}
-	return nil
+	return any
 }
 
 func CreateFencingRequest(node *v1.Node, cause string) error {
@@ -269,7 +265,6 @@ func CreateFencingRequest(node *v1.Node, cause string) error {
 		logrus.Errorf("Failed to create fencing request for node %s: %v", node.Name, err)
 	} else {
 		logrus.Infof("Created fencing request for node %s: %s", node.Name, cause)
-		nodeFailureHandled[node.Name] = true
 	}
 	return err
 }
