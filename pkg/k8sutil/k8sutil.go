@@ -1,20 +1,19 @@
 package k8sutil
 
 import (
-	"os"
-	"net"
 	"fmt"
+	"net"
+	"os"
 	"time"
-	
+
 	"github.com/sirupsen/logrus"
-	
-	"github.com/operator-framework/operator-sdk/pkg/sdk/query"
+
 	"github.com/operator-framework/operator-sdk/pkg/sdk/action"
+	"github.com/operator-framework/operator-sdk/pkg/sdk/query"
 	sdkTypes "github.com/operator-framework/operator-sdk/pkg/sdk/types"
 	sdkutil "github.com/operator-framework/operator-sdk/pkg/util/k8sutil"
 
 	api "github.com/beekhof/fencing-operator/pkg/apis/fencing/v1alpha1"
-	
 
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -40,7 +39,6 @@ var (
 		Factor:   1.2,
 		Steps:    5,
 	}
-
 )
 
 // mustNewKubeClientAndConfig returns the in-cluster config and kubernetes client
@@ -132,7 +130,7 @@ func RegisterCRD() error {
 		}
 		return true, nil
 	})
-	
+
 	if err != nil {
 		logrus.Errorf("Failed to create %v: %v", crd.ObjectMeta.Name, err)
 		return err
@@ -159,8 +157,8 @@ func CreateFencingCRD() *apiextensionsv1beta1.CustomResourceDefinition {
 			// The objects are namespace scoped but CRDs are always cluster scoped
 			Scope: apiextensionsv1beta1.NamespaceScoped,
 			Names: apiextensionsv1beta1.CustomResourceDefinitionNames{
-				Plural: api.FencingRequestResourcePlural,
-				Kind:   api.FencingRequestResourceKind,
+				Plural:     api.FencingRequestResourcePlural,
+				Kind:       api.FencingRequestResourceKind,
 				ShortNames: []string{api.FencingRequestResourceShort},
 				//				Singular: "repl",
 			},
@@ -176,34 +174,34 @@ func WaitCRDReady(extcli apiextensionsclient.Interface, crdName string) error {
 			APIVersion: apiextensionsv1beta1.SchemeGroupVersion.Version,
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      crdName,
+			Name: crdName,
 		},
 	}
 
 	err := wait.ExponentialBackoff(defaultBackoff, func() (bool, error) {
 		err := query.Get(crd)
 		if err != nil {
-                        return false, err
-                }
-                for _, cond := range crd.Status.Conditions {
-                        switch cond.Type {
-                        case apiextensionsv1beta1.Established:
-                                if cond.Status == apiextensionsv1beta1.ConditionTrue {
-                                        return true, nil
-                                }
-                        case apiextensionsv1beta1.NamesAccepted:
-                                if cond.Status == apiextensionsv1beta1.ConditionFalse {
-                                        return false, fmt.Errorf("Name conflict: %v", cond.Reason)
-                                }
-                        }
-                }
+			return false, err
+		}
+		for _, cond := range crd.Status.Conditions {
+			switch cond.Type {
+			case apiextensionsv1beta1.Established:
+				if cond.Status == apiextensionsv1beta1.ConditionTrue {
+					return true, nil
+				}
+			case apiextensionsv1beta1.NamesAccepted:
+				if cond.Status == apiextensionsv1beta1.ConditionFalse {
+					return false, fmt.Errorf("Name conflict: %v", cond.Reason)
+				}
+			}
+		}
 		return false, nil
 	})
-	
+
 	if err != nil {
 		return fmt.Errorf("CRD creation failed: %v", err)
 	}
-        return nil
+	return nil
 }
 
 func CreateObject(object sdkTypes.Object, cause string) error {
@@ -216,6 +214,6 @@ func CreateObject(object sdkTypes.Object, cause string) error {
 		}
 		return true, nil
 	})
-	
+
 	return err
 }

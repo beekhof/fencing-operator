@@ -1,19 +1,19 @@
 package main
 
 import (
-	"os"
-	"fmt"
-	"flag"
 	"context"
+	"flag"
+	"fmt"
+	"os"
 	"runtime"
 
 	stub "github.com/beekhof/fencing-operator/pkg/stub"
 	sdk "github.com/operator-framework/operator-sdk/pkg/sdk"
 	sdkVersion "github.com/operator-framework/operator-sdk/version"
-	
-	"github.com/sirupsen/logrus"
+
 	"github.com/beekhof/fencing-operator/pkg/constants"
 	"github.com/beekhof/fencing-operator/pkg/k8sutil"
+	"github.com/sirupsen/logrus"
 )
 
 var (
@@ -62,8 +62,8 @@ func main() {
 	}
 
 	Version()
- 	if printVersion {
-		os.Exit(0)		
+	if printVersion {
+		os.Exit(0)
 	}
 
 	id, err := os.Hostname()
@@ -71,11 +71,9 @@ func main() {
 		logrus.Fatalf("failed to get hostname: %v", err)
 	}
 
-
 	k8sutil.SingletonWith(id, name, namespace, fmt.Sprintf("fencing-operator-%s", mode), run)
 	panic("unreachable")
 }
-
 
 func run(stop <-chan struct{}) {
 	resyncInterval := 0 // Non-zero results in duplicate update notifications, even if nothing changed
