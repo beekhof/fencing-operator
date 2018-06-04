@@ -41,30 +41,39 @@ data:
     methods:
     - name: openstack-power
       mechanisms:
-      - driver: openstack
-        config:
-        - user: admin
-        - auth_url: https://1.1.1.1:5000
+      - container:
+          name: openstack
+          image: quay.io/beekhof/openstack-client:latest
+          cmd: [ "/bin/nova", "delete" ]
+          env:
+          - name: OS_USERNAME
+            value: admin
+          - name: OS_AUTH_URL
+            value: https://1.1.1.1:5000
+        argumentFormat: env
         secrets:
-        - password: overcloud-secret
+        - OS_PASSWORD: overcloud-secret
     - name: fallback
       mechanisms:
-      - driver: baremetal
-        module: ipmilan
+      - container:
+          name: baremetal
+          image: quay.io/beekhof/fence-agents:latest
+          cmd: [ "/sbin/fence_ipmilan", "--user", "admin" ]
+        passTargetAs: port
         dynamic_config:
         - field: ip
-	  default: 127.0.0.1
-	  # If no default is supplied, an error will be logged and the
+	  format: cli
+          default: 127.0.0.1
+          # If no default is supplied, an error will be logged and the
           # mechanism will be considered to have failed
-	  values:
+          values:
           - somehost: 1.2.3.4
           - otherhost: 1.2.3.5
-        config:
-        - user: admin
+        secret_format: cli
         secrets:
         - password: ipmi-secret
 ---
-apiVersion: v1
+Apiversion: v1
 kind: ConfigMap
 metadata:
   labels:
@@ -106,7 +115,7 @@ data:
       mechanisms:
       - driver: baremetal
         module: ipmilan
-	action: off  # Support the ability to tell the node to stay down instead of reboot?
+	      action: off  # Support the ability to tell the node to stay down instead of reboot?
         dynamic_config:
         - field: ip
 	  default: 127.0.0.1
@@ -131,8 +140,8 @@ data:
       mechanisms:
       - driver: rhevm
         timeoutSeconds: 10
-	retries: 5
-	passTargetAs: port
+	      retries: 5
+        passTargetAs: port
         config:
         - ip: ovirt.com  # address to the rhevm management
         - username: admin@internal

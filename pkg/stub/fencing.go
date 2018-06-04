@@ -3,18 +3,20 @@ package stub
 import (
 	"fmt"
 	"time"
+
 	"github.com/beekhof/fencing-operator/pkg/apis/fencing/v1alpha1"
 	"github.com/beekhof/fencing-operator/pkg/config"
+	"github.com/beekhof/fencing-operator/pkg/util"
 
 	"github.com/sirupsen/logrus"
 
-	"k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	v1batch "k8s.io/api/batch/v1"
+	"k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/operator-framework/operator-sdk/pkg/sdk/action"
 	"github.com/operator-framework/operator-sdk/pkg/sdk/query"
@@ -29,6 +31,48 @@ var (
 	fencingConfigs = map[string]*v1alpha1.FencingConfig{}
 )
 
+func (h *Handler) HandleFencingJob(ctx types.Context, req *v1alpha1.FencingRequest, job *v1batch.Job, deleted bool) error {
+	if job.Status.Active == 0 && job.Status.Failed == 0 && job.Status.Succeeded == 0 {
+		return nil // Not running yet
+	} else if req.Status.Complete {
+		logrus.Infof("Ignoring job %v for old %v request", job.Name, req.Name)
+		return nil
+	} else if req.Status.ActiveJob != nil && *req.Status.ActiveJob != job.Name {
+		logrus.Infof("Ignoring old job %v for %v", job.Name, req.Name)
+		return nil
+	} else if job.Status.Active == 0 && job.Status.Failed != 0 && job.Status.Succeeded != 0 {
+		req.AddResult(*req.Status.ActiveMethod, v1alpha1.MethodProgress, fmt.Errorf("%v complete", job.Name))
+	}
+
+	util.JsonLogObject("Updating", req)
+
+	if job.Status.Active == 0 && job.Status.Failed == 0 {
+		// Delete the relevant nodes/pods
+		req.SetFinalResult(v1alpha1.MethodComplete, fmt.Errorf("%v complete", job.Name))
+	}
+
+	return h.HandleFencingRequest(ctx, req, false)
+}
+
+func (h *Handler) HandleJob(ctx types.Context, job *v1batch.Job, deleted bool) error {
+	target := job.Labels["target"]
+	owner := job.OwnerReferences[0].Name
+	logrus.Infof("Updating %v/%v/%v: active=%v, failed=%v, succeeded=%v", job.Name, target, owner, job.Status.Active, job.Status.Failed, job.Status.Succeeded)
+
+	util.JsonLogObject("Updated", job)
+	node, err := getNode(target)
+	if err != nil {
+		return err
+	}
+
+	_, requests := listFencingRequests(node, owner)
+	for _, request := range requests {
+		return h.HandleFencingJob(ctx, &request, job, deleted)
+	}
+
+	return nil
+}
+
 func (h *Handler) HandleConfigMap(ctx types.Context, configmap *v1.ConfigMap, deleted bool) error {
 	// Maintain a list of FencingConfig objects for HandleFencingRequest() to use
 	if _, ok := configmap.Data["fencing-config"]; !ok {
@@ -41,28 +85,27 @@ func (h *Handler) HandleConfigMap(ctx types.Context, configmap *v1.ConfigMap, de
 		return nil
 	}
 
-	if cm, ok := fencingConfigs[configmap.Name]; ok {
-		if cm.ResourceVersion == configmap.ResourceVersion && cm.Generation == configmap.Generation {
-			logrus.Infof("No change to %v", configmap.Name)
-			return nil
-		} else {
-			logrus.Infof("Updating %v", configmap.Name)
-		}
+	if _, ok := fencingConfigs[configmap.Name]; ok {
+		logrus.Infof("Updating %v", configmap.Name)
+		fencingConfigs[configmap.Name] = nil // In case the new version is invalid
 
 	} else {
 		logrus.Infof("Creating %v", configmap.Name)
 	}
 
 	methods := []v1alpha1.FencingMethod{}
-	cfg, err :=  config.NewConfigFromString(configmap.Data["fencing-config"])
+	//logrus.Infof("Data: %v", configmap.Data["fencing-config"])
+
+	cfg, err := config.NewConfigFromString(configmap.Data["fencing-config"])
 	if err != nil {
 		logrus.Errorf("Bad config %v: %v", configmap.Name, err)
 		return err
 	}
 
 	for _, subcfg := range cfg.GetSubConfigArray("methods") {
-		err, m := newFencingMethodFromConfig(subcfg)
+		err, m := v1alpha1.NewFencingMethodFromConfig(subcfg)
 		if err != nil {
+			logrus.Errorf("Bad fencing method: %v", err)
 			return err
 		}
 		methods = append(methods, *m)
@@ -71,13 +114,10 @@ func (h *Handler) HandleConfigMap(ctx types.Context, configmap *v1.ConfigMap, de
 	fencingConfigs[configmap.Name] = &v1alpha1.FencingConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: configmap.Name,
-			ResourceVersion: configmap.ResourceVersion,
-			Generation: configmap.Generation,
 		},
 		NodeSelector: cfg.GetMapOfStrings("nodeSelector"),
-		Methods: methods,
+		Methods:      methods,
 	}
-	logrus.Infof("Created %v: %v", configmap.Name, fencingConfigs[configmap.Name])
 	return nil
 }
 
@@ -108,7 +148,7 @@ func (h *Handler) HandleFencingRequest(ctx types.Context, req *v1alpha1.FencingR
 	if req.Status.Complete {
 		return nil
 	}
-		
+
 	err, cfg := chooseFencingConfig(req)
 	if err != nil {
 		logrus.Errorf("No valid fencing configurations for %v (%v)", req.Spec.Target, req.Name)
@@ -138,15 +178,16 @@ func (h *Handler) HandleFencingRequest(ctx types.Context, req *v1alpha1.FencingR
 		Factor:   1.2,
 		Steps:    5,
 	}
-	
-	logrus.Infof("Creating: %v", job)
+
+	util.JsonLogObject("Created Job", job)
 	err = wait.ExponentialBackoff(backoff, func() (bool, error) {
 		if err := action.Create(job); err != nil && !errors.IsAlreadyExists(err) {
 			// Retry it as errors writing to the API server are common
 			logrus.Infof("Creation failed: %v", err)
 			return false, err
 		}
-		logrus.Infof("Creation passed: %v", job, err)
+		logrus.Infof("Job creation passed: %v/%v", job.Name, job.UID)
+		req.Status.ActiveJob = &job.Name
 		return true, nil
 	})
 
@@ -155,6 +196,7 @@ func (h *Handler) HandleFencingRequest(ctx types.Context, req *v1alpha1.FencingR
 	}
 
 	logrus.Infof("Scheduled fencing job %v for request %s (%v)", method.Name, req.Spec.Target, req.UID)
+	req.AddResult(method.Name, v1alpha1.MethodProgress, fmt.Errorf("%v initiated as %v", method.Name, job.Name))
 	return nil
 }
 
@@ -199,7 +241,7 @@ func chooseFencingConfig(req *v1alpha1.FencingRequest) (error, *v1alpha1.Fencing
 	return fmt.Errorf("No valid config for %v", req.Spec.Target), nil
 }
 
-func isFencingMethodActive(req *v1alpha1.FencingRequest, method v1alpha1.FencingMethod) bool  {
+func isFencingMethodActive(req *v1alpha1.FencingRequest, method v1alpha1.FencingMethod) bool {
 	err, jobs := ListJobs(req, method.Name)
 	if err != nil {
 		logrus.Errorf("Error retrieving the list of jobs: %v", err)
@@ -224,15 +266,44 @@ func chooseFencingMethod(req *v1alpha1.FencingRequest, cfg *v1alpha1.FencingConf
 			return nil, &method, last
 		} else if *req.Status.ActiveMethod == method.Name && isFencingMethodActive(req, method) {
 			return nil, &method, last
-			
+
 		} else if *req.Status.ActiveMethod == method.Name {
 			next = true
 		} else if next {
 			return nil, &method, last
-		}			
+		}
 	}
 
 	return fmt.Errorf("No remaining methods available"), nil, true
+}
+
+func processSecrets(mech v1alpha1.FencingMechanism, c *v1.Container) []v1.Volume {
+	volumes := []v1.Volume{}
+	for key, s := range mech.Secrets {
+		// Create volumes for any sensitive parameters that are stored as k8s secrets
+		volumes = append(volumes, v1.Volume{
+			Name: "secret-" + key,
+			VolumeSource: v1.VolumeSource{
+				Secret: &v1.SecretVolumeSource{
+					SecretName: s,
+				},
+			},
+		})
+
+		// Relies on an ENTRYPOINT that looks for SECRETPATH_field=/path/to/file and add: --field=$(cat /path/to/file) to the command line
+		c.Env = append(c.Env, v1.EnvVar{
+			Name:  fmt.Sprintf("SECRETPATH_%s", key),
+			Value: fmt.Sprintf("%s/%s", secretsDir, s),
+		})
+
+		// Mount the secrets into the container so they can be easily retrieved
+		c.VolumeMounts = append(c.VolumeMounts, v1.VolumeMount{
+			Name:      "secret-" + key,
+			ReadOnly:  true,
+			MountPath: secretsDir + s,
+		})
+	}
+	return volumes
 }
 
 func createFencingJob(req *v1alpha1.FencingRequest, cfg *v1alpha1.FencingConfig, method v1alpha1.FencingMethod) (error, *v1batch.Job) {
@@ -249,25 +320,8 @@ func createFencingJob(req *v1alpha1.FencingRequest, cfg *v1alpha1.FencingConfig,
 			return fmt.Errorf("Method %s aborted: %v", method.Name, err), nil
 		}
 
-		// Create volumes for any sensitive parameters that are stored as k8s secrets
-		for key, s := range mech.Secrets {
-			volumes = append(volumes, v1.Volume{
-				Name: "secret-" + key,
-				VolumeSource: v1.VolumeSource{
-					Secret: &v1.SecretVolumeSource{
-						SecretName: s,
-					},
-				},
-			})
-		}
-
-		// Mount the secrets into the container so they can be easily retrieved
-		for key, s := range mech.Secrets {
-			c.VolumeMounts = append(c.VolumeMounts, v1.VolumeMount{
-				Name:      "secret-" + key,
-				ReadOnly:  true,
-				MountPath: secretsDir + s,
-			})
+		for _, v := range processSecrets(mech, c) {
+			volumes = append(volumes, v)
 		}
 
 		// Add the container to the PodSpec
@@ -279,11 +333,11 @@ func createFencingJob(req *v1alpha1.FencingRequest, cfg *v1alpha1.FencingConfig,
 	return nil, &v1batch.Job{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Job",
-			APIVersion: "v1",
+			APIVersion: "batch/v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: fmt.Sprintf("%v-job-", req.Name),
-			Namespace: req.Namespace,    
+			Namespace:    req.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(req, schema.GroupVersionKind{
 					Group:   v1alpha1.SchemeGroupVersion.Group,
@@ -297,11 +351,11 @@ func createFencingJob(req *v1alpha1.FencingRequest, cfg *v1alpha1.FencingConfig,
 			BackoffLimit: &method.Retries,
 			// Parallelism: 1,
 			// Completions: 1, // len(containers),
-			Template: v1.PodTemplateSpec {
-				Spec: v1.PodSpec {
-					Containers: containers,
+			Template: v1.PodTemplateSpec{
+				Spec: v1.PodSpec{
+					Containers:    containers,
 					RestartPolicy: v1.RestartPolicyOnFailure,
-					Volumes: volumes,
+					Volumes:       volumes,
 				},
 			},
 		},
@@ -330,11 +384,11 @@ func ListNodes(selector map[string]string) (error, []v1.Node) {
 }
 
 func ListJobs(req *v1alpha1.FencingRequest, method string) (error, []v1batch.Job) {
-	
+
 	jobs := &v1batch.JobList{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Job",
-			APIVersion: "v1",
+			APIVersion: "batch/v1",
 		},
 	}
 
@@ -351,60 +405,3 @@ func ListJobs(req *v1alpha1.FencingRequest, method string) (error, []v1batch.Job
 	}
 	return err, jobs.Items
 }
-
-func newFencingMethodFromConfig(cfg *config.Config) (error, *v1alpha1.FencingMethod)  {
-	mechanisms := []v1alpha1.FencingMechanism{}
-	seconds := int32(cfg.GetInt("requireAfterSeconds"))
-
-	for _, subcfg := range cfg.GetSubConfigArray("mechanisms") {
-		err, m := newFencingMechanismFromConfig(subcfg)
-		if err != nil {
-			return err, nil
-		}
-		mechanisms = append(mechanisms, *m)
-	}
-
-	logrus.Infof("Creating internal representation for %v", cfg.GetString("name"))
-	return nil, &v1alpha1.FencingMethod{
-		Name:       cfg.GetString("name"),
-		Retries:    1,
-		RequireAfterSeconds: &seconds,
-		Mechanisms: mechanisms,
-	}
-//	method.GetSliceOfStrings("namespaces"),
-//	method.GetBool("fail_on_error"),
-//	method.GetString("openshift.namespace")
-}
-
-func newFencingMechanismFromConfig(cfg *config.Config) (error, *v1alpha1.FencingMechanism)  {
-	dcs := []v1alpha1.FencingDynamicConfig{}
-	seconds := int32(cfg.GetInt("timeoutSeconds"))
-
-	for _, subcfg := range cfg.GetSubConfigArray("dynamicConfig") {
-		err, d := newDynamicAttributeFromConfig(subcfg)
-		if err != nil {
-			return err, nil
-		}
-		dcs = append(dcs, *d)
-	}
-
-	return nil, &v1alpha1.FencingMechanism{
-		Driver:         cfg.GetString("driver"),
-		Module:         cfg.GetString("module"),
-		Image:          cfg.GetString("image"),
-		PassTargetAs:   cfg.GetString("passTargetAs"),
-		TimeoutSeconds: &seconds,
-		Config:         cfg.GetMapOfStrings("config"),
-		DynamicConfig:  dcs,
-		Secrets:        cfg.GetMapOfStrings("secrets"),
-	}
-}
-
-func newDynamicAttributeFromConfig(cfg *config.Config) (error, *v1alpha1.FencingDynamicConfig)  {
-	return nil, &v1alpha1.FencingDynamicConfig{
-		Field:   cfg.GetString("field"),
-		Default: cfg.GetString("default"),
-		Values:  cfg.GetMapOfStrings("values"),
-	}
-}
-

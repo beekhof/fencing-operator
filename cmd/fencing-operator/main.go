@@ -83,19 +83,17 @@ func run(stop <-chan struct{}) {
 		k8sutil.RegisterCRD()
 	}
 
-	switch mode {
-	case "watcher":
+	if mode == "watcher" || mode == "all" {
 		sdk.Watch("v1", "Node", "default", resyncInterval)
 		sdk.Watch("v1", "Event", "default", resyncInterval)
-	case "executioner":
+	}
+
+	if mode == "executioner" || mode == "all" {
 		sdk.Watch("v1", "ConfigMap", namespace, resyncInterval)
-		sdk.Watch("fencing.clusterlabs.org/v1alpha1", "FencingRequest", namespace, resyncInterval)
-	case "all":
-		sdk.Watch("v1", "Node", "default", resyncInterval)
-		sdk.Watch("v1", "Event", "default", resyncInterval)
-		sdk.Watch("v1", "ConfigMap", namespace, resyncInterval)
+		sdk.Watch("batch/v1", "Job", namespace, resyncInterval)
 		sdk.Watch("fencing.clusterlabs.org/v1alpha1", "FencingRequest", namespace, resyncInterval)
 	}
+
 	sdk.Handle(stub.NewHandler())
 	sdk.Run(context.TODO())
 }

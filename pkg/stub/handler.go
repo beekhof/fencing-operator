@@ -1,34 +1,34 @@
 package stub
 
 import (
-	"os"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/beekhof/fencing-operator/pkg/apis/fencing/v1alpha1"
 	"github.com/beekhof/fencing-operator/pkg/constants"
+	"github.com/beekhof/fencing-operator/pkg/util"
 
 	"github.com/operator-framework/operator-sdk/pkg/sdk/action"
-	"github.com/operator-framework/operator-sdk/pkg/sdk/query"
 	"github.com/operator-framework/operator-sdk/pkg/sdk/handler"
+	"github.com/operator-framework/operator-sdk/pkg/sdk/query"
 	"github.com/operator-framework/operator-sdk/pkg/sdk/types"
 	"github.com/sirupsen/logrus"
+	v1batch "k8s.io/api/batch/v1"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
-
-//	"github.com/operator-framework/operator-sdk/pkg/k8sclient"
-//	"k8s.io/apimachinery/pkg/fields"
+	//	"github.com/operator-framework/operator-sdk/pkg/k8sclient"
+	//	"k8s.io/apimachinery/pkg/fields"
 )
 
 var (
 	// TODO read supported source from node problem detector config - this issue is still WIP
 	supportedNodeProblemSources = sets.NewString("abrt-notification", "abrt-adaptor", "docker-monitor", "kernel-monitor", "kernel")
 )
-
 
 func NewHandler() handler.Handler {
 	return &Handler{}
@@ -42,19 +42,22 @@ func (h *Handler) Handle(ctx types.Context, event types.Event) error {
 	switch o := event.Object.(type) {
 	case *v1.Node:
 		h.HandleNode(ctx, o, event.Deleted)
-		
+
 	case *v1.Event:
 		h.HandleEvent(ctx, o, event.Deleted)
-		
+
+	case *v1batch.Job:
+		h.HandleJob(ctx, o, event.Deleted)
+
 	case *v1.ConfigMap:
 		h.HandleConfigMap(ctx, o, event.Deleted)
 
 	case *v1alpha1.FencingRequest:
 		h.HandleFencingRequest(ctx, o, event.Deleted)
 	default:
-		logrus.Errorf("Unhandled event: %v ", o)		
+		logrus.Errorf("Unhandled event: %v ", o)
 	}
-	
+
 	return nil
 }
 
@@ -65,11 +68,11 @@ func (h *Handler) HandleNode(ctx types.Context, node *v1.Node, deleted bool) err
 		return nil
 	}
 
-//	logrus.Infof("Node updated: %v ", node.Name)
+	//	logrus.Infof("Node updated: %v ", node.Name)
 	for _, condition := range node.Status.Conditions {
 		if v1.NodeReady == condition.Type && v1.ConditionUnknown == condition.Status {
 			// TODO: Add new (unique) 'reasons' to the existing crd?
-			
+
 			//logrus.Infof("Processing node %s loss (%v): %v", node.Name, nodeFailureHandled[node.Name], condition)
 			if isNodeDirty(node, condition) {
 				CreateFencingRequest(node, fmt.Sprintf("%v", condition))
@@ -86,6 +89,24 @@ func (h *Handler) HandleNode(ctx types.Context, node *v1.Node, deleted bool) err
 	return nil
 }
 
+func getNode(name string) (*v1.Node, error) {
+	node := &v1.Node{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Node",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+	}
+
+	err := query.Get(node)
+	if err != nil {
+		return nil, err
+	}
+	return node, nil
+}
+
 func (h *Handler) HandleEvent(ctx types.Context, event *v1.Event, deleted bool) error {
 	if event.Type != v1.EventTypeWarning || !supportedNodeProblemSources.Has(string(event.Source.Component)) {
 		//logrus.Infof("Processing event: %v ", event)
@@ -93,17 +114,7 @@ func (h *Handler) HandleEvent(ctx types.Context, event *v1.Event, deleted bool) 
 	}
 
 	logrus.Warningf("Processing event: %v ", event)
-	node := &v1.Node{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Node",
-			APIVersion: "v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      event.Source.Host,
-		},
-	}
-	
-	err := query.Get(node)
+	node, err := getNode(event.Source.Host)
 	if err != nil {
 		logrus.Errorf("Failed to get node '%s': %s", event.Source.Host, err)
 		return err
@@ -155,14 +166,13 @@ func isPodDirty(pod v1.Pod) bool {
 			claim := vol.VolumeSource.PersistentVolumeClaim.ClaimName
 			logrus.Infof("\tpvc: %v", claim)
 
-
 			pvc := &v1.PersistentVolumeClaim{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "PersistentVolumeClaim",
 					APIVersion: "v1",
 				},
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      vol.VolumeSource.PersistentVolumeClaim.ClaimName,
+					Name: vol.VolumeSource.PersistentVolumeClaim.ClaimName,
 				},
 			}
 
@@ -207,9 +217,9 @@ func listFencingRequests(node *v1.Node, name string) (error, []v1alpha1.FencingR
 
 	var sel string
 	if len(name) > 0 {
-		sel = fmt.Sprintf("spec.target=%s,name=%s", node.Name, name)
+		sel = fmt.Sprintf("target=%s,metadata.name=%s", node.Name, name)
 	} else {
-		sel = fmt.Sprintf("spec.target=%s", node.Name)
+		sel = fmt.Sprintf("target=%s", node.Name)
 	}
 	opt := &metav1.ListOptions{FieldSelector: sel}
 	err := query.List("--all-namespaces", requestList, query.WithListOptions(opt))
@@ -222,7 +232,7 @@ func listFencingRequests(node *v1.Node, name string) (error, []v1alpha1.FencingR
 func CancelFencingRequests(node *v1.Node, name string) bool {
 	// Delete a specific request or all for the supplied node
 	any := false
-	_, requests := listFencingRequests(node, name) 
+	_, requests := listFencingRequests(node, name)
 	for _, request := range requests {
 		any = true
 		err := action.Delete(&request)
@@ -236,14 +246,14 @@ func CancelFencingRequests(node *v1.Node, name string) bool {
 func CreateFencingRequest(node *v1.Node, cause string) error {
 
 	// Look for any existing FencingRequests, only create a new one if not found
-	_, requests := listFencingRequests(node, "") 
+	_, requests := listFencingRequests(node, "")
 	for _, request := range requests {
 		if request.Status.Complete {
 			logrus.Infof("Node %s is already scheduled for fencing by %v", node.UID, request.Name)
 			return nil
 		}
 	}
-	
+
 	backoff := wait.Backoff{
 		Duration: 1 * time.Second,
 		Factor:   1.2,
@@ -251,6 +261,7 @@ func CreateFencingRequest(node *v1.Node, cause string) error {
 	}
 
 	request := newFencingRequest(node, cause)
+	util.JsonLogObject("Creating", request)
 
 	err := wait.ExponentialBackoff(backoff, func() (bool, error) {
 		err := action.Create(request)
@@ -260,7 +271,7 @@ func CreateFencingRequest(node *v1.Node, cause string) error {
 		}
 		return true, nil
 	})
-	
+
 	if err != nil {
 		logrus.Errorf("Failed to create fencing request for node %s: %v", node.Name, err)
 	} else {
@@ -269,12 +280,12 @@ func CreateFencingRequest(node *v1.Node, cause string) error {
 	return err
 }
 
-
 func newFencingRequest(node *v1.Node, cause string) *v1alpha1.FencingRequest {
 	affected := []string{}
 	name := fmt.Sprintf("node-fence-%s-", node.Name)
 	labels := map[string]string{
-		"app": "busy-box",
+		"app":    "busy-box",
+		"target": node.Name,
 	}
 
 	// TODO: Here or when fencing completes and we delete the pods?
@@ -284,19 +295,19 @@ func newFencingRequest(node *v1.Node, cause string) *v1alpha1.FencingRequest {
 			affected = append(affected, pod.Name)
 		}
 	}
-	
+
 	// volumes := dirtyVolumes(pod) // Do anything with these perhaps?  Disk fencing?
 	return &v1alpha1.FencingRequest{
 		TypeMeta: metav1.TypeMeta{
-			Kind:       "FencingRequest",
+			Kind: "FencingRequest",
 			//APIGroup:   v1alpha1.SchemeGroupVersion.Group,
 			APIVersion: "fencing.clusterlabs.org/v1alpha1", //v1alpha1.SchemeGroupVersion.Version,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: name,
 			Namespace:    os.Getenv(constants.EnvOperatorPodNamespace),
-			Labels: labels,
-/* TODO: Link to the operator itself
+			Labels:       labels,
+			/* TODO: Link to the operator itself
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(cr, schema.GroupVersionKind{
 					Group:   v1alpha1.SchemeGroupVersion.Group,
@@ -305,11 +316,11 @@ func newFencingRequest(node *v1.Node, cause string) *v1alpha1.FencingRequest {
 					UID:     "FencingSet",
 				}),
 			},
-*/
+			*/
 		},
 		Spec: v1alpha1.FencingRequestSpec{
-			Target: node.Name,
-			Origin: cause,
+			Target:    node.Name,
+			Origin:    cause,
 			Operation: "Off",
 			//ValidAfter date.Time `json:"validAfter,omitempty"` // TODO: Implement
 			PodList: affected,

@@ -107,24 +107,27 @@ func (c *Config) GetSliceOfStrings(key string) []string {
 		}
 		return s
 	}
-	log.Debugf("Unable to get %v from config", key)
+	log.Debugf("Unable to get %v from %v (%T)", key, val, val)
 	return nil
 }
 
 func (c *Config) GetMapOfStrings(key string) map[string]string {
-	c.mutex.RLock()
-	subMap := createNewMap(c.config)
-	//Can unlock the map for reading after we copy the map.
-	c.mutex.RUnlock()
 
+	subMap := c.GetSubConfigArray(key)
 	newMap := map[string]string{}
-	for k, v := range subMap {
-		if s, ok := v.(string); ok {
-			newMap[k] = s
+	for _, sMap := range subMap {
+		//log.Infof("Got %v from %v (%T)", key, sMap.config, sMap.config)
+		for k, v := range sMap.config {
+			if s, ok := v.(string); ok {
+				newMap[k] = s
+			} else {
+				log.Debugf("Unable to get string from %T (%v)", v, v)
+			}
 		}
+		return newMap
 	}
-	
-	return newMap
+	log.Debugf("Unable to get %v from config", key)
+	return nil
 }
 
 // GetInt - Retrieve the configuration value as a int.
@@ -155,6 +158,21 @@ func (c *Config) GetBool(key string) bool {
 	}
 	log.Debugf("Unable to get %v from config", key)
 	return false
+}
+
+// GetBool - Retrieve the configuration value as a bool.
+func (c *Config) GetBoolWithDefault(key string, ifNotFound bool) bool {
+	c.mutex.RLock()
+	subMap := createNewMap(c.config)
+	//Can unlock the map for reading after we copy the map.
+	c.mutex.RUnlock()
+	keys := strings.Split(key, ".")
+	val := retrieveValueFromKeys(keys, subMap)
+	if v, ok := val.(bool); ok {
+		return v
+	}
+	log.Debugf("Unable to get %v from config", key)
+	return ifNotFound
 }
 
 // GetFloat64 - Retrieve the configuration value as a float64
